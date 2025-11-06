@@ -1,0 +1,166 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Bar Chart Annotations (Legend with features and patch)",
+  "description": "A schema for bar charts with a legend that includes features text and patch bounding boxes.",
+  "type": "object",
+  "$defs": {
+    "bbox": {
+      "type": "array",
+      "items": [
+        {"type": "integer", "description": "Top-left x-coordinate of the bounding box."},
+        {"type": "integer", "description": "Top-left y-coordinate of the bounding box."},
+        {"type": "integer", "description": "Bottom-right x-coordinate of the bounding box."},
+        {"type": "integer", "description": "Bottom-right y-coordinate of the bounding box."}
+      ],
+      "description": "Bounding box coordinates as [x1, y1, x2, y2]."
+    },
+    "text": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Text content."
+        },
+        "bbox": {
+          "$ref": "#/$defs/bbox"
+        }
+      },
+      "required": ["text", "bbox"]
+    },
+    "legendEntry": {
+      "type": "object",
+      "properties": {
+        "feature": {
+          "$ref": "#/$defs/text"
+        },
+        "patch": {
+          "bbox": {
+            "$ref": "#/$defs/bbox"
+          },
+          "description": "Bounding box coordinates for the colored patch in the legend."
+        }
+      },
+      "required": ["feature", "patch"]
+    }
+  },
+  "properties": {
+    "chart_metadata": {
+      "type": "object",
+      "description": "Metadata and visual attributes of the chart.",
+      "properties": {
+        "title": {
+          "$ref": "#/$defs/text"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["bar", "barh"],
+          "description": "Type of chart (bar for vertical, barh for horizontal)."
+        },
+        "bar_width": {
+          "type": "integer",
+          "description": "Width of the bars in the chart (in pixels)."
+        },
+        "legend": {
+          "type": "object",
+          "properties": {
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/legendEntry"
+              },
+              "description": "Legend entries with features text and patch bounding boxes."
+            },
+            "bbox": {
+              "$ref": "#/$defs/bbox",
+              "description": "Bounding box coordinates for the legend."
+            }
+          },
+          "required": ["entries"]
+        }
+      },
+      "required": ["title", "type", "bar_width", "legend"]
+    },
+    "data": {
+      "type": "object",
+      "description": "Data and visual regions of the chart.",
+      "properties": {
+        "categories": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/text"
+          },
+          "description": "Categories or labels for the chart, as text objects with optional bounding boxes."
+        },
+        "category_axis": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "$ref": "#/$defs/text"
+            },
+            "bbox": {
+              "$ref": "#/$defs/bbox"
+            }
+          },
+          "required": ["label", "bbox"]
+        },
+        "value_axis": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "$ref": "#/$defs/text"
+            },
+            "min_value": {
+              "type": "number",
+              "description": "Minimum value on the value axis."
+            },
+            "max_value": {
+              "type": "number",
+              "description": "Maximum value on the value axis."
+            },
+            "bbox": {
+              "$ref": "#/$defs/bbox"
+            }
+          },
+          "required": ["label", "min_value", "max_value", "bbox"]
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "feature": {
+                "type": "string",
+                "description": "Name of the feature."
+              },
+              "data": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string",
+                      "description": "Category or label for the bar."
+                    },
+                    "value": {
+                      "type": "number",
+                      "description": "Value for the bar."
+                    },
+                    "bbox": {
+                      "$ref": "#/$defs/bbox"
+                    }
+                  },
+                  "required": ["category", "value", "bbox"]
+                },
+                "description": "Data points for the features, with optional bar bounding boxes."
+              }
+            },
+            "required": ["feature", "data"]
+          },
+          "description": "Data features in the chart, each with a name (as a text object), and data points with optional bar bounding boxes."
+        }
+      },
+      "required": ["categories", "category_axis", "value_axis", "features"]
+    }
+  },
+  "required": ["chart_metadata", "data"]
+}
