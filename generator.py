@@ -9,8 +9,6 @@ import argparse
 import uuid
 import shutil
 
-from matplotlib.container import BarContainer
-from matplotlib.patches import Rectangle
 from jsonschema import validate, ValidationError
 
 def generate_random_string(max_length: int = 10):
@@ -49,7 +47,7 @@ def generate_random_samples(samples: int = 1):
 def generate_random_bar_chart(
     output_dir,
     num_charts: int = 5,
-    max_bars: int = 64,
+    max_bars: int = 10,
     clear_output: bool = False,
     validate_schema: bool = False
 ):
