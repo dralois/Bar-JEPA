@@ -219,3 +219,5 @@ __marimo__/
 output/**
 UB_PMC_sample/**
 .DS_STORE
+data/**
+chart-gen.code-workspace

@@ -53,7 +53,7 @@
         },
         "type": {
           "type": "string",
-          "enum": ["bar", "barh"],
+          "enum": ["vertical", "horizontal"],
           "description": "Type of chart (bar for vertical, barh for horizontal)."
         },
         "bar_width": {
@@ -75,7 +75,7 @@
               "description": "Bounding box coordinates for the legend."
             }
           },
-          "required": ["entries"]
+          "required": ["entries", "bbox"]
         }
       },
       "required": ["title", "type", "bar_width", "legend"]
@@ -84,13 +84,6 @@
       "type": "object",
       "description": "Data and visual regions of the chart.",
       "properties": {
-        "categories": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/text"
-          },
-          "description": "Categories or labels for the chart, as text objects with optional bounding boxes."
-        },
         "category_axis": {
           "type": "object",
           "properties": {
@@ -99,9 +92,16 @@
             },
             "bbox": {
               "$ref": "#/$defs/bbox"
+            },
+            "ticks": {
+              "type": "array",
+              "items": {
+                  "$ref": "#/$defs/text"
+              },
+              "description": "Ticks on the category axis, as text objects with optional bounding boxes."
             }
           },
-          "required": ["label", "bbox"]
+          "required": ["label", "bbox", "ticks"]
         },
         "value_axis": {
           "type": "object",
@@ -119,9 +119,16 @@
             },
             "bbox": {
               "$ref": "#/$defs/bbox"
+            },
+            "ticks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/text"
+              },
+              "description": "Ticks on the value axis, as text objects with optional bounding boxes."
             }
           },
-          "required": ["label", "min_value", "max_value", "bbox"]
+          "required": ["label", "min_value", "max_value", "bbox", "ticks"]
         },
         "features": {
           "type": "array",
@@ -159,8 +166,9 @@
           "description": "Data features in the chart, each with a name (as a text object), and data points with optional bar bounding boxes."
         }
       },
-      "required": ["categories", "category_axis", "value_axis", "features"]
+      "required": ["category_axis", "value_axis", "features"]
     }
   },
   "required": ["chart_metadata", "data"]
 }
+
