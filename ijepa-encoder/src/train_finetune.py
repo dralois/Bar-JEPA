@@ -230,7 +230,7 @@ def main(args, resume_preempt=False):
     start_epoch = 0
     # -- load training checkpoint
     if load_model:
-        encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
+        encoder, predictor, target_encoder, optimizer, scaler, _ = load_checkpoint(
             device=device,
             r_path=load_path,
             encoder=encoder,
