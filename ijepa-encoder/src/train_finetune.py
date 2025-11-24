@@ -230,7 +230,7 @@ def main(args, resume_preempt=False):
     start_epoch = 0
     # -- load training checkpoint
     if load_model:
-        encoder, predictor, target_encoder, optimizer, scaler, _ = load_checkpoint(
+        encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
             device=device,
             r_path=load_path,
             encoder=encoder,
@@ -238,11 +238,23 @@ def main(args, resume_preempt=False):
             target_encoder=target_encoder,
             opt=optimizer,
             scaler=scaler)
-        for _ in range(start_epoch*ipe):
-            scheduler.step()
-            wd_scheduler.step()
-            next(momentum_scheduler)
-            mask_collator.step()
+
+    # -- Reset optimizer and scheduler.
+    if load_model:
+        start_epoch = 0 
+        optimizer, scaler, scheduler, wd_scheduler = init_opt(
+            encoder=encoder,
+            predictor=predictor,
+            wd=wd,
+            final_wd=final_wd,
+            start_lr=start_lr,
+            ref_lr=lr,
+            final_lr=final_lr,
+            iterations_per_epoch=ipe,
+            warmup=warmup,
+            num_epochs=num_epochs,
+            ipe_scale=ipe_scale,
+            use_bfloat16=use_bfloat16)
 
     def save_checkpoint(epoch):
         save_dict = {
