@@ -87,7 +87,7 @@ class Charts(torchvision.datasets.DatasetFolder):
         self.image_paths = [
             os.path.join(data_path, fname)
             for fname in os.listdir(data_path)
-            if fname.lower().endswith(['.png', '.jpg', '.jpeg'])
+            if fname.lower().endswith(('.png', '.jpg', '.jpeg'))
         ]
         logger.info(f'Loaded {len(self.image_paths)} images from {data_path}')
 
