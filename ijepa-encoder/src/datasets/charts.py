@@ -69,20 +69,25 @@ class Charts(torchvision.datasets.DatasetFolder):
         """
         Chart dataset loader
 
-        :param root: root network directory for ImageNet data
+        :param root: root network directory for chart data
         :param image_folder: path to images inside root network directory
         :param train: whether to load train data (or validation)
         """
 
         suffix = 'train/images' if train else 'train/images'
         data_path = os.path.join(root, image_folder, suffix)
+        if not os.path.exists(data_path):
+            suffix = ''
+        data_path = os.path.join(root, image_folder, suffix)
+        if not os.path.exists(data_path):
+            raise ValueError(f'Datapath {data_path} does not exist')
         logger.info(f'data-path {data_path}')
 
         self.transform = transform
         self.image_paths = [
             os.path.join(data_path, fname)
             for fname in os.listdir(data_path)
-            if fname.lower().endswith('.png')
+            if fname.lower().endswith(['.png', '.jpg', '.jpeg'])
         ]
         logger.info(f'Loaded {len(self.image_paths)} images from {data_path}')
 
