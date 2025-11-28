@@ -222,3 +222,4 @@ UB_PMC_sample/**
 data/**
 chart-gen.code-workspace
 logs/**
+model/**
