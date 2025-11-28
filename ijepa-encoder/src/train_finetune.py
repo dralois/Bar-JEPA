@@ -74,6 +74,7 @@ def main(args, resume_preempt=False):
     use_bfloat16 = args['meta']['use_bfloat16']
     model_name = args['meta']['model_name']
     load_model = args['meta']['load_checkpoint'] or resume_preempt
+    do_finetune = args['meta']['do_finetune']
     r_file = args['meta']['read_checkpoint']
     copy_data = args['meta']['copy_data']
     pred_depth = args['meta']['pred_depth']
@@ -248,29 +249,20 @@ def main(args, resume_preempt=False):
     if load_model:
         encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
             device=device,
+            world_size=world_size,
+            do_finetune=do_finetune,
             r_path=load_path,
             encoder=encoder,
             predictor=predictor,
             target_encoder=target_encoder,
             opt=optimizer,
             scaler=scaler)
-
-    # -- Reset optimizer and scheduler.
-    if load_model:
-        start_epoch = 0 
-        optimizer, scaler, scheduler, wd_scheduler = init_opt(
-            encoder=encoder,
-            predictor=predictor,
-            wd=wd,
-            final_wd=final_wd,
-            start_lr=start_lr,
-            ref_lr=lr,
-            final_lr=final_lr,
-            iterations_per_epoch=ipe,
-            warmup=warmup,
-            num_epochs=num_epochs,
-            ipe_scale=ipe_scale,
-            use_bfloat16=use_bfloat16)
+        if not do_finetune:
+            for _ in range(start_epoch*ipe):
+                scheduler.step()
+                wd_scheduler.step()
+                next(momentum_scheduler)
+                mask_collator.step()
 
     def save_checkpoint(epoch):
         save_dict = {
@@ -291,7 +283,7 @@ def main(args, resume_preempt=False):
                 torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
 
     # -- TRAINING LOOP
-    for epoch in range(start_epoch, num_epochs):
+    for epoch in range(start_epoch, start_epoch + num_epochs):
         logger.info('Epoch %d' % (epoch + 1))
 
         # -- update distributed-data-loader epoch
@@ -340,7 +332,7 @@ def main(args, resume_preempt=False):
                     return loss
 
                 # Step 1. Forward
-                with torch.cuda.amp.autocast(autocast_dtype, enabled=use_bfloat16):
+                with torch.cuda.amp.autocast(dtype=autocast_dtype, enabled=use_bfloat16):
                     h = forward_target()
                     z = forward_context()
                     loss = loss_fn(z, h)
@@ -363,7 +355,10 @@ def main(args, resume_preempt=False):
                         param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
 
                 return (float(loss), _new_lr, _new_wd, grad_stats)
+
+
             (loss, _new_lr, _new_wd, grad_stats), etime = gpu_timer(train_step)
+
             loss_meter.update(loss)
             time_meter.update(etime)
 

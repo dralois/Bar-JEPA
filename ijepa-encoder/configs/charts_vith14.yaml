@@ -37,6 +37,7 @@ meta:
   pred_depth: 12
   pred_emb_dim: 384
   read_checkpoint: /leonardo_scratch/large/userexternal/aepple00/IN1K-vit.h.14-300e.pth.tar
+  do_finetune: true
   use_bfloat16: true
 optimization:
   ema:
