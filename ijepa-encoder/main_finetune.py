@@ -67,8 +67,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     num_gpus = len(args.devices)
-    mp.freeze_support()
-    mp.set_start_method('spawn')
+
+    try:
+        mp.freeze_support()
+        mp.set_start_method('spawn')
+    except Exception:
+        pass
 
     for rank in range(num_gpus):
         p = mp.Process(
