@@ -74,10 +74,14 @@ if __name__ == '__main__':
     except Exception:
         pass
 
+    processes = []
     for rank in range(num_gpus):
-        p = mp.Process(
+        processes.append(mp.Process(
             target=process_main,
             args=(rank, args.fname, num_gpus, args.devices)
-        )
-        p.start()
-        p.join()
+        ))
+        processes[-1].start()
+
+    for process in processes:
+        process.join()
+
