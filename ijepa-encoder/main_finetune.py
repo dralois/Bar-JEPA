@@ -56,17 +56,24 @@ def process_main(rank, fname, world_size, devices):
 
     world_size, rank = init_distributed(rank_and_world_size=(rank, world_size))
     logger.info(f'Running... (rank: {rank}/{world_size})')
-    app_main(args=params)
+
+    try:
+        app_main(args=params)
+    except Exception as ex:
+        print(ex)
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
 
     num_gpus = len(args.devices)
+    mp.freeze_support()
     mp.set_start_method('spawn')
 
     for rank in range(num_gpus):
-        mp.Process(
+        p = mp.Process(
             target=process_main,
             args=(rank, args.fname, num_gpus, args.devices)
-        ).start()
+        )
+        p.start()
+        p.join()

@@ -14,6 +14,8 @@ import yaml
 
 import submitit
 
+from src.train_finetune import main as app_main
+
 logging.basicConfig(
     filename='application.log',  # Specify the log file name
     filemode='a',  # Append to the log file
