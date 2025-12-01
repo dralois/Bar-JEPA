@@ -224,5 +224,5 @@ data_small/**
 chart-gen.code-workspace
 logs/**
 model/**
-wandb/**
+**/wandb/**
 slurm_logs/**

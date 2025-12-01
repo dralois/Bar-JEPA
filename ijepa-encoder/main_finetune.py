@@ -33,11 +33,13 @@ def process_main(rank, fname, world_size, devices):
 
     logging.basicConfig()
     logger = logging.getLogger()
-    
+
     # Add a log handler (e.g., StreamHandler or FileHandler)
     log_handler = logging.StreamHandler()  # Output log messages to console
     # log_handler = logging.FileHandler('logfile.txt')  # Output log messages to a file
     logger.addHandler(log_handler)
+
+    logger.info(f'starting up {devices[rank]} -> {os.environ["CUDA_VISIBLE_DEVICES"]} (rank: {rank}/{world_size})')
 
     if rank == 0:
         logger.setLevel(logging.INFO)
