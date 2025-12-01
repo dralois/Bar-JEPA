@@ -225,3 +225,4 @@ chart-gen.code-workspace
 logs/**
 model/**
 wandb/**
+slurm_logs/**
