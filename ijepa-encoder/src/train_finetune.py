@@ -21,6 +21,7 @@ import copy
 import logging
 import sys
 import yaml
+import wandb
 
 import numpy as np
 
@@ -282,6 +283,16 @@ def main(args, resume_preempt=False):
             if (epoch + 1) % checkpoint_freq == 0:
                 torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
 
+    # -- Initialize wandb
+    run = wandb.init(
+        entity="bar-ijepa",
+        mode='offline',
+        config={
+            'learning-rate': lr,
+            'epochs': num_epochs
+        }
+    )
+
     # -- TRAINING LOOP
     for epoch in range(start_epoch, start_epoch + num_epochs):
         logger.info('Epoch %d' % (epoch + 1))
@@ -390,12 +401,26 @@ def main(args, resume_preempt=False):
 
             log_stats()
 
+            def log_wandb():
+                run.log({
+                    "epoch": epoch + 1,
+                    "train-loss": loss_meter.avg,
+                    "gpu-mem": torch.cuda.max_memory_allocated() / 1024.**2,
+                    "gradients/first-layer": grad_stats.first_layer,
+                    "gradients/last-layer": grad_stats.last_layer,
+                    "gradients/min": grad_stats.min,
+                    "gradients/max": grad_stats.max
+                })
+
+            log_wandb()
+
             assert not np.isnan(loss), 'loss is nan'
 
         # -- Save Checkpoint after every epoch
         logger.info('avg. loss %.3f' % loss_meter.avg)
         save_checkpoint(epoch+1)
 
+    run.finish()
 
 if __name__ == "__main__":
     main()

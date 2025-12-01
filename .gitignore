@@ -224,3 +224,4 @@ data_small/**
 chart-gen.code-workspace
 logs/**
 model/**
+wandb/**
