@@ -258,12 +258,11 @@ def main(args, resume_preempt=False):
             target_encoder=target_encoder,
             opt=optimizer,
             scaler=scaler)
-        if not do_finetune:
-            for _ in range(start_epoch*ipe):
-                scheduler.step()
-                wd_scheduler.step()
-                next(momentum_scheduler)
-                mask_collator.step()
+        for _ in range(60*ipe if do_finetune else start_epoch*ipe):
+            scheduler.step()
+            wd_scheduler.step()
+            next(momentum_scheduler)
+            mask_collator.step()
 
     def save_checkpoint(epoch):
         save_dict = {
