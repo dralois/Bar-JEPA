@@ -231,7 +231,8 @@ def main(args, resume_preempt=False):
         warmup=warmup,
         num_epochs=num_epochs,
         ipe_scale=ipe_scale,
-        use_bfloat16=use_bfloat16)
+        use_bfloat16=use_bfloat16,
+        device_type=device.type)
 
     if world_size != 1:
         encoder = DistributedDataParallel(encoder, static_graph=True)
@@ -342,7 +343,7 @@ def main(args, resume_preempt=False):
                     return loss
 
                 # Step 1. Forward
-                with torch.cuda.amp.autocast(dtype=autocast_dtype, enabled=use_bfloat16):
+                with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                     h = forward_target()
                     z = forward_context()
                     loss = loss_fn(z, h)
