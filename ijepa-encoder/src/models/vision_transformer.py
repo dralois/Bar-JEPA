@@ -21,16 +21,16 @@ from src.masks.utils import apply_masks
 
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
     """
-    grid_size: int of the grid height and width
+    grid_size: tuple of the grid height and width
     return:
-    pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
+    pos_embed: [grid_size[0]*grid_size[1], embed_dim] or [1+grid_size[0]*grid_size[1], embed_dim] (w/ or w/o cls_token)
     """
-    grid_h = np.arange(grid_size, dtype=float)
-    grid_w = np.arange(grid_size, dtype=float)
+    grid_h = np.arange(grid_size[0], dtype=float)
+    grid_w = np.arange(grid_size[1], dtype=float)
     grid = np.meshgrid(grid_w, grid_h)  # here w goes first
     grid = np.stack(grid, axis=0)
 
-    grid = grid.reshape([2, 1, grid_size, grid_size])
+    grid = grid.reshape([2, 1, grid_size[0], grid_size[1]])
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
     if cls_token:
         pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
@@ -135,18 +135,24 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
+
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, None, None, :]
+            attn = attn.masked_fill(~attention_mask, float("-inf"))
+
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
+
         return x, attn
 
 
@@ -162,8 +168,8 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = MLP(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, return_attention=False):
-        y, attn = self.attn(self.norm1(x))
+    def forward(self, x, attention_mask=None, return_attention=False):
+        y, attn = self.attn(self.norm1(x), attention_mask=attention_mask)
         if return_attention:
             return attn
         x = x + self.drop_path(y)
@@ -174,18 +180,17 @@ class Block(nn.Module):
 class PatchEmbed(nn.Module):
     """ Image to Patch Embedding
     """
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+    def __init__(self, num_patches=14*14, patch_size=16, in_chans=3, embed_dim=768):
         super().__init__()
-        num_patches = (img_size // patch_size) * (img_size // patch_size)
-        self.img_size = img_size
         self.patch_size = patch_size
         self.num_patches = num_patches
 
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
-        B, C, H, W = x.shape
-        x = self.proj(x).flatten(2).transpose(1, 2)
+        C, H, W = x.shape
+        # e.g. [3, 224, 224] -> [768, 14, 14] -> [768, 196] -> [196, 768] -> [1, 196, 768]
+        x = self.proj(x).flatten(1).transpose(0, 1).unsqueeze(0)
         return x
 
 
@@ -217,6 +222,7 @@ class ConvEmbed(nn.Module):
         return p.flatten(2).transpose(1, 2)
 
 
+# TODO: Rewrite for arbirary grid size
 class VisionTransformerPredictor(nn.Module):
     """ Vision Transformer """
     def __init__(
@@ -234,6 +240,8 @@ class VisionTransformerPredictor(nn.Module):
         drop_path_rate=0.0,
         norm_layer=nn.LayerNorm,
         init_std=0.02,
+        img_size=(224, 224),
+        patch_size=16,
         **kwargs
     ):
         super().__init__()
@@ -244,7 +252,7 @@ class VisionTransformerPredictor(nn.Module):
         self.predictor_pos_embed = nn.Parameter(torch.zeros(1, num_patches, predictor_embed_dim),
                                                 requires_grad=False)
         predictor_pos_embed = get_2d_sincos_pos_embed(self.predictor_pos_embed.shape[-1],
-                                                      int(num_patches**.5),
+                                                      (img_size[0] // patch_size, img_size[1] // patch_size),
                                                       cls_token=False)
         self.predictor_pos_embed.data.copy_(torch.from_numpy(predictor_pos_embed).float().unsqueeze(0))
         # --
@@ -330,7 +338,7 @@ class VisionTransformer(nn.Module):
     """ Vision Transformer """
     def __init__(
         self,
-        img_size=[224],
+        img_size=(224, 224),
         patch_size=16,
         in_chans=3,
         embed_dim=768,
@@ -351,17 +359,17 @@ class VisionTransformer(nn.Module):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
         self.num_heads = num_heads
+        max_patches = (img_size[0] // patch_size) * (img_size[1] // patch_size)
         # --
         self.patch_embed = PatchEmbed(
-            img_size=img_size[0],
+            num_patches=max_patches,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim)
-        num_patches = self.patch_embed.num_patches
         # --
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim), requires_grad=False)
+        self.pos_embed = nn.Parameter(torch.zeros(1, max_patches, embed_dim), requires_grad=False)
         pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1],
-                                            int(self.patch_embed.num_patches**.5),
+                                            (img_size[0] // patch_size, img_size[1] // patch_size),
                                             cls_token=False)
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         # --
@@ -404,41 +412,63 @@ class VisionTransformer(nn.Module):
                 masks = [masks]
 
         # -- patchify x
-        x = self.patch_embed(x)
-        B, N, D = x.shape
+        # [C, W, H] -> [N, D]
+        grid_sizes = [(img.shape[1] // self.patch_embed.patch_size,
+                 img.shape[2] // self.patch_embed.patch_size) for img in x]
+        x = [self.patch_embed(curr) for curr in x]
+        B, N, D = len(x), self.patch_embed.num_patches, self.embed_dim
 
-        # -- add positional embedding to x
-        pos_embed = self.interpolate_pos_encoding(x, self.pos_embed)
+        # -- Pad x to max_patches if needed
+        attention_mask = torch.ones(B, N).bool()
+        for i, img in enumerate(x):
+            if img.shape[1] < N:
+                padding = torch.zeros(1, N - img.shape[1], D)
+                x[i] = torch.cat([img, padding], dim=1)
+                attention_mask[i, -padding.shape[1]:] = 0
+
+        # [B, N, D]
+        x = torch.cat(x)
+
+        # -- Interpolate positional encoding
+        pos_embed = self.interpolate_pos_encoding(x, self.pos_embed, grid_sizes)
+
+        # -- Add positional embedding to x
         x = x + pos_embed
 
-        # -- mask x
+        # -- Mask x (if masks are provided)
         if masks is not None:
+            # TODO: Does this work?
             x = apply_masks(x, masks)
 
-        # -- fwd prop
+        # -- Forward through blocks
         for i, blk in enumerate(self.blocks):
-            x = blk(x)
+            x = blk(x, attention_mask=attention_mask)
 
         if self.norm is not None:
             x = self.norm(x)
 
         return x
 
-    def interpolate_pos_encoding(self, x, pos_embed):
-        npatch = x.shape[1] - 1
-        N = pos_embed.shape[1] - 1
-        if npatch == N:
-            return pos_embed
-        class_emb = pos_embed[:, 0]
-        pos_embed = pos_embed[:, 1:]
-        dim = x.shape[-1]
-        pos_embed = nn.functional.interpolate(
-            pos_embed.reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
-            scale_factor=math.sqrt(npatch / N),
-            mode='bicubic',
-        )
-        pos_embed = pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-        return torch.cat((class_emb.unsqueeze(0), pos_embed), dim=1)
+    def interpolate_pos_encoding(self, x, pos_embed, grid_sizes):
+        B, N, D = x.shape
+        grid_h = grid_w = int(math.sqrt(pos_embed.shape[1]))
+        # Position embeddings [D, N] -> [1, D, sqrt(N), sqrt(N)]
+        pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
+        output = torch.zeros(B, N, D)
+
+        for i in range(B):
+            h, w = grid_sizes[i]
+            pos_embed_interp = nn.functional.interpolate(
+                pos_embed_2d,
+                size=(h, w),
+                mode='bicubic',
+                align_corners=False
+            )
+            # [1, D, h, w] -> [1, h*w, D]
+            pos_embed_interp = pos_embed_interp.permute(0, 2, 3, 1).reshape(1, h * w, D)
+            output[i, :h*w, :] = pos_embed_interp
+
+        return output
 
 
 def vit_predictor(**kwargs):

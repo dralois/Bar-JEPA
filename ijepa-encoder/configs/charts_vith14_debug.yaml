@@ -12,6 +12,7 @@ data:
   use_color_distortion: false
   use_gaussian_blur: false
   use_horizontal_flip: false
+  preserve_aspect_ratio: true
 logging:
   folder: ./output/
   write_tag: jepa

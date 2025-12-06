@@ -7,7 +7,10 @@
 
 from logging import getLogger
 
+from math import floor
+
 from PIL import ImageFilter
+from PIL.Image import Image
 
 import torch
 import torchvision.transforms as transforms
@@ -24,9 +27,12 @@ def make_transforms(
     color_distortion=False,
     gaussian_blur=False,
     normalization=((0.485, 0.456, 0.406),
-                   (0.229, 0.224, 0.225))
+                   (0.229, 0.224, 0.225)),
+    preserve_aspect_ratio=True,
+    max_patches=14*14,
+    patch_size=16
 ):
-    logger.info('making imagenet data transforms')
+    logger.info('making data transforms')
 
     def get_color_distortion(s=1.0):
         # s is the strength of color distortion.
@@ -39,7 +45,10 @@ def make_transforms(
         return color_distort
 
     transform_list = []
-    transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
+    if preserve_aspect_ratio:
+        transform_list += [ResizeToFixedPatches(max_patches=max_patches, patch_size=patch_size)]
+    else:
+        transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
     if horizontal_flip:
         transform_list += [transforms.RandomHorizontalFlip()]
     if color_distortion:
@@ -65,3 +74,26 @@ class GaussianBlur(object):
 
         radius = self.radius_min + torch.rand(1) * (self.radius_max - self.radius_min)
         return img.filter(ImageFilter.GaussianBlur(radius=radius))
+
+
+class ResizeToFixedPatches(object):
+    def __init__(self, max_patches=14*14, patch_size=16):
+        self.max_patches = int(max_patches)
+        self.patch_size = int(patch_size)
+
+    def __call__(self, img):
+        image_height, image_width = img.size
+
+        scale = (self.max_patches * (self.patch_size / image_height) * (self.patch_size / image_width)) ** 0.5
+
+        num_feasible_rows = max(min(floor(scale * image_height / self.patch_size), self.max_patches), 1)
+        num_feasible_cols = max(min(floor(scale * image_width / self.patch_size), self.max_patches), 1)
+
+        resized_height = max(int(num_feasible_rows * self.patch_size), 1)
+        resized_width = max(int(num_feasible_cols * self.patch_size), 1)
+
+        return transforms.Resize(
+            (resized_height, resized_width),
+            interpolation=transforms.InterpolationMode.BICUBIC,
+            antialias=True
+        )(img)

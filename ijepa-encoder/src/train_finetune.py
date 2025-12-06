@@ -104,6 +104,7 @@ def main(args, resume_preempt=False):
     use_horizontal_flip = args['data']['use_horizontal_flip']
     use_color_distortion = args['data']['use_color_distortion']
     color_jitter = args['data']['color_jitter_strength']
+    preserve_aspect_ratio = args['data']['preserve_aspect_ratio']
     # --
     batch_size = args['data']['batch_size']
     pin_mem = args['data']['pin_mem']
@@ -117,6 +118,7 @@ def main(args, resume_preempt=False):
     # -- MASK
     allow_overlap = args['mask']['allow_overlap']  # whether to allow overlap b/w context and target blocks
     patch_size = args['mask']['patch_size']  # patch-size for model training
+    patch_count = int((crop_size // patch_size) ** 2.)
     num_enc_masks = args['mask']['num_enc_masks']  # number of context blocks
     min_keep = args['mask']['min_keep']  # min number of patches in context block
     enc_mask_scale = args['mask']['enc_mask_scale']  # scale of context blocks
@@ -185,23 +187,26 @@ def main(args, resume_preempt=False):
 
     # -- make data transforms
     mask_collator = MBMaskCollator(
-        input_size=crop_size,
         patch_size=patch_size,
-        pred_mask_scale=pred_mask_scale,
+        patch_count=patch_count,
         enc_mask_scale=enc_mask_scale,
+        pred_mask_scale=pred_mask_scale,
         aspect_ratio=aspect_ratio,
         nenc=num_enc_masks,
         npred=num_pred_masks,
-        allow_overlap=allow_overlap,
-        min_keep=min_keep)
+        min_keep=min_keep,
+        allow_overlap=allow_overlap)
 
     transform = make_transforms(
         crop_size=crop_size,
         crop_scale=crop_scale,
-        gaussian_blur=use_gaussian_blur,
+        color_jitter=color_jitter,
         horizontal_flip=use_horizontal_flip,
         color_distortion=use_color_distortion,
-        color_jitter=color_jitter)
+        gaussian_blur=use_gaussian_blur,
+        preserve_aspect_ratio=preserve_aspect_ratio,
+        max_patches=patch_count,
+        patch_size=patch_size)
 
     # -- init data-loaders/samplers
     _, unsupervised_loader, unsupervised_sampler = make_charts(
@@ -209,12 +214,12 @@ def main(args, resume_preempt=False):
             batch_size=batch_size,
             collator=mask_collator,
             pin_mem=pin_mem,
-            training=True,
             num_workers=num_workers,
             world_size=world_size,
             rank=rank,
             root_path=root_path,
             image_folder=image_folder,
+            training=True,
             drop_last=True)
     ipe = len(unsupervised_loader)
 
@@ -222,17 +227,17 @@ def main(args, resume_preempt=False):
     optimizer, scaler, scheduler, wd_scheduler = init_opt(
         encoder=encoder,
         predictor=predictor,
-        wd=wd,
-        final_wd=final_wd,
+        iterations_per_epoch=ipe,
         start_lr=start_lr,
         ref_lr=lr,
-        final_lr=final_lr,
-        iterations_per_epoch=ipe,
         warmup=warmup,
         num_epochs=num_epochs,
-        ipe_scale=ipe_scale,
+        wd=wd,
+        final_wd=final_wd,
+        final_lr=final_lr,
+        device_type=device.type,
         use_bfloat16=use_bfloat16,
-        device_type=device.type)
+        ipe_scale=ipe_scale)
 
     if world_size != 1:
         encoder = DistributedDataParallel(encoder, static_graph=True)
@@ -309,7 +314,7 @@ def main(args, resume_preempt=False):
 
             def load_imgs():
                 # -- unsupervised imgs
-                imgs = udata[0].to(device, non_blocking=True)
+                imgs = [udata[i].to(device, non_blocking=True) for i in range(len(udata))]
                 masks_1 = [u.to(device, non_blocking=True) for u in masks_enc]
                 masks_2 = [u.to(device, non_blocking=True) for u in masks_pred]
                 return (imgs, masks_1, masks_2)
