@@ -31,7 +31,6 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
 from src.masks.multiblock import MaskCollator as MBMaskCollator
-from src.masks.utils import apply_masks
 from src.utils.distributed import (
     init_distributed,
     AllReduce
@@ -41,7 +40,7 @@ from src.utils.logging import (
     gpu_timer,
     grad_logger,
     AverageMeter)
-from src.utils.tensors import repeat_interleave_batch
+from src.utils.tensors import repeat_interleave_batch, apply_masks
 from src.datasets.charts import make_charts
 
 from src.helper import (
@@ -75,6 +74,7 @@ def main(args, resume_preempt=False):
     use_bfloat16 = args['meta']['use_bfloat16']
     model_name = args['meta']['model_name']
     load_model = args['meta']['load_checkpoint'] or resume_preempt
+    ckpt_epoch = args['meta']['checkpoint_epoch']
     do_finetune = args['meta']['do_finetune']
     r_file = args['meta']['read_checkpoint']
     copy_data = args['meta']['copy_data']
@@ -195,7 +195,8 @@ def main(args, resume_preempt=False):
         nenc=num_enc_masks,
         npred=num_pred_masks,
         min_keep=min_keep,
-        allow_overlap=allow_overlap)
+        allow_overlap=allow_overlap,
+        preserve_aspect_ratio=preserve_aspect_ratio)
 
     transform = make_transforms(
         crop_size=crop_size,
@@ -264,7 +265,9 @@ def main(args, resume_preempt=False):
             target_encoder=target_encoder,
             opt=optimizer,
             scaler=scaler)
-        for _ in range(60*ipe if do_finetune else start_epoch*ipe):
+        if do_finetune:
+            start_epoch -= (ckpt_epoch - 1)
+        for _ in range(start_epoch*ipe):
             scheduler.step()
             wd_scheduler.step()
             next(momentum_scheduler)
@@ -315,8 +318,8 @@ def main(args, resume_preempt=False):
             def load_imgs():
                 # -- unsupervised imgs
                 imgs = [udata[i].to(device, non_blocking=True) for i in range(len(udata))]
-                masks_1 = [u.to(device, non_blocking=True) for u in masks_enc]
-                masks_2 = [u.to(device, non_blocking=True) for u in masks_pred]
+                masks_1 = [[u.to(device, non_blocking=True) for u in masks_enc[i]] for i in range(len(masks_enc))]
+                masks_2 = [[u.to(device, non_blocking=True) for u in masks_pred[i]] for i in range(len(masks_pred))]
                 return (imgs, masks_1, masks_2)
             imgs, masks_enc, masks_pred = load_imgs()
             maskA_meter.update(len(masks_enc[0][0]))
@@ -334,7 +337,7 @@ def main(args, resume_preempt=False):
                         B = len(h)
                         # -- create targets (masked regions of h)
                         h = apply_masks(h, masks_pred)
-                        h = repeat_interleave_batch(h, B, repeat=len(masks_enc))
+                        h = repeat_interleave_batch(h, B, repeat=len(masks_enc[0]))
                         return h
 
                 def forward_context():

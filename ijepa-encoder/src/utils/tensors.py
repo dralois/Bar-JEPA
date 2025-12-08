@@ -57,8 +57,11 @@ def apply_masks(x, masks):
     """
     all_x = []
     for m in masks:
-        mask_keep = m.unsqueeze(-1).repeat(1, 1, x.size(-1))
-        all_x += [torch.gather(x, dim=1, index=mask_keep)]
+        m_val = torch.zeros_like(x, device=x.device)
+        for i, m_ in enumerate(m):
+            m_idx = m_.unsqueeze(1).expand(-1, x.size(-1))
+            m_val[i].scatter_(0, m_idx, 1.0)
+        all_x += [x * m_val]
     return torch.cat(all_x, dim=0)
 
 

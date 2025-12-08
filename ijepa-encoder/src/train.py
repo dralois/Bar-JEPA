@@ -30,7 +30,6 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
 from src.masks.multiblock import MaskCollator as MBMaskCollator
-from src.masks.utils import apply_masks
 from src.utils.distributed import (
     init_distributed,
     AllReduce
@@ -40,7 +39,7 @@ from src.utils.logging import (
     gpu_timer,
     grad_logger,
     AverageMeter)
-from src.utils.tensors import repeat_interleave_batch
+from src.utils.tensors import repeat_interleave_batch, apply_masks
 from src.datasets.imagenet1k import make_imagenet1k
 
 from src.helper import (

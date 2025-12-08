@@ -14,9 +14,9 @@ import torch.nn as nn
 
 from src.utils.tensors import (
     trunc_normal_,
-    repeat_interleave_batch
+    repeat_interleave_batch,
+    apply_masks
 )
-from src.masks.utils import apply_masks
 
 
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
@@ -419,10 +419,10 @@ class VisionTransformer(nn.Module):
         B, N, D = len(x), self.patch_embed.num_patches, self.embed_dim
 
         # -- Pad x to max_patches if needed
-        attention_mask = torch.ones(B, N).bool()
+        attention_mask = torch.ones(B, N, device=self.pos_embed.device).bool()
         for i, img in enumerate(x):
             if img.shape[1] < N:
-                padding = torch.zeros(1, N - img.shape[1], D)
+                padding = torch.zeros(1, N - img.shape[1], D, device=self.pos_embed.device)
                 x[i] = torch.cat([img, padding], dim=1)
                 attention_mask[i, -padding.shape[1]:] = 0
 
@@ -437,7 +437,17 @@ class VisionTransformer(nn.Module):
 
         # -- Mask x (if masks are provided)
         if masks is not None:
-            # TODO: Does this work?
+            # Adjust attention mask to only survive where there are masks
+            for i, mask in enumerate(masks):
+                # Create a mask for the current batch element
+                current_mask = torch.zeros(N, dtype=torch.bool, device=self.pos_embed.device)
+                current_mask[tuple(mask)] = True
+                # Apply the mask to the attention mask
+                attention_mask[i] &= current_mask
+
+            # Also apply mask to embeddings
+            # TODO: Is this even necessary?
+            masks = [[mask[i] for mask in masks] for i in range(len(masks[0]))]
             x = apply_masks(x, masks)
 
         # -- Forward through blocks
@@ -447,14 +457,15 @@ class VisionTransformer(nn.Module):
         if self.norm is not None:
             x = self.norm(x)
 
-        return x
+        # Mask output embeddings (should not contribute to loss)
+        return x * attention_mask.unsqueeze(-1)
 
     def interpolate_pos_encoding(self, x, pos_embed, grid_sizes):
         B, N, D = x.shape
         grid_h = grid_w = int(math.sqrt(pos_embed.shape[1]))
         # Position embeddings [D, N] -> [1, D, sqrt(N), sqrt(N)]
         pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
-        output = torch.zeros(B, N, D)
+        output = torch.zeros(B, N, D, device=self.pos_embed.device)
 
         for i in range(B):
             h, w = grid_sizes[i]

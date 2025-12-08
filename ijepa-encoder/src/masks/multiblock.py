@@ -29,7 +29,8 @@ class MaskCollator(object):
         nenc=1,
         npred=2,
         min_keep=4,
-        allow_overlap=False
+        allow_overlap=False,
+        preserve_aspect_ratio=False
     ):
         super(MaskCollator, self).__init__()
         self.patch_size = patch_size
@@ -41,6 +42,7 @@ class MaskCollator(object):
         self.npred = npred
         self.min_keep = min_keep  # minimum number of patches to keep
         self.allow_overlap = allow_overlap  # whether to allow overlap b/w enc and pred masks
+        self.preserve_aspect_ratio = preserve_aspect_ratio
         self._itr_counter = Value('i', -1)  # collator is shared across worker processes
 
     def step(self):
@@ -131,7 +133,6 @@ class MaskCollator(object):
         '''
         B = len(batch)
 
-        #collated_batch = torch.utils.data.default_collate(batch)
         collated_batch = [img for img, _ in batch]
 
         seed = self.step()
@@ -142,21 +143,24 @@ class MaskCollator(object):
         min_keep_pred = float('inf')
         min_keep_enc = float('inf')
 
-        for img, _ in batch:
+        for i, (img, _) in enumerate(batch):
             # B, C, W, H
             img_s = (img.shape[-2] // self.patch_size, img.shape[-1] // self.patch_size)
 
-            p_size = self._sample_block_size(
-                input_size=img_s,
-                generator=g,
-                scale=self.pred_mask_scale,
-                aspect_ratio_scale=self.aspect_ratio)
-            e_size = self._sample_block_size(
-                input_size=img_s,
-                generator=g,
-                scale=self.enc_mask_scale,
-                aspect_ratio_scale=(1., 1.))
+            # Resample for each image when preserving aspect ratio
+            if self.preserve_aspect_ratio or i == 0:
+                p_size = self._sample_block_size(
+                    input_size=img_s,
+                    generator=g,
+                    scale=self.pred_mask_scale,
+                    aspect_ratio_scale=self.aspect_ratio)
+                e_size = self._sample_block_size(
+                    input_size=img_s,
+                    generator=g,
+                    scale=self.enc_mask_scale,
+                    aspect_ratio_scale=(1., 1.))
 
+            # Sample n=4 predictor masks (overlap allowed, at least x patches)
             masks_p, masks_C = [], []
             for _ in range(self.npred):
                 mask, mask_C = self._sample_block_mask(img_s, p_size)
@@ -172,20 +176,19 @@ class MaskCollator(object):
             except Exception as e:
                 logger.warning(f'Encountered exception in mask-generator {e}')
 
-            masks_e, masks_C_e = [], []
+            # Sample n=1 encoder masks (only where there is no predictor mask)
+            masks_e = []
             for _ in range(self.nenc):
                 mask, mask_C = self._sample_block_mask(img_s, e_size, acceptable_regions=acceptable_regions)
                 masks_e.append(mask)
-                masks_C_e.append(mask_C)
                 min_keep_enc = min(min_keep_enc, len(mask))
             collated_masks_enc.append(masks_e)
 
-        # TODO: What happens here?
-        collated_masks_pred = [[cm[:min_keep_pred] for cm in cm_list] for cm_list in collated_masks_pred]
-        collated_masks_pred = torch.utils.data.default_collate(collated_masks_pred)
-        # --
-        collated_masks_enc = [[cm[:min_keep_enc] for cm in cm_list] for cm_list in collated_masks_enc]
-        collated_masks_enc = torch.utils.data.default_collate(collated_masks_enc)
+        # When not preserving aspect ratio, all masks have the same number of patches
+        if not self.preserve_aspect_ratio:
+            # [B [npred / nenc]]
+            collated_masks_pred = [[cm[:min_keep_pred] for cm in cm_list] for cm_list in collated_masks_pred]
+            collated_masks_enc = [[cm[:min_keep_enc] for cm in cm_list] for cm_list in collated_masks_enc]
 
         return collated_batch, collated_masks_enc, collated_masks_pred
 

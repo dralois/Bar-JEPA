@@ -38,6 +38,7 @@ meta:
   pred_depth: 12
   pred_emb_dim: 192
   read_checkpoint: null
+  checkpoint_epoch: 0
   do_finetune: true
   use_bfloat16: true
 optimization:
