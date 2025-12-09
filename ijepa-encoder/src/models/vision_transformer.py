@@ -227,9 +227,9 @@ class VisionTransformerPredictor(nn.Module):
     """ Vision Transformer """
     def __init__(
         self,
-        num_patches,
+        max_patches,
+        patch_size=16,
         embed_dim=768,
-        predictor_embed_dim=384,
         depth=6,
         num_heads=12,
         mlp_ratio=4.0,
@@ -240,8 +240,7 @@ class VisionTransformerPredictor(nn.Module):
         drop_path_rate=0.0,
         norm_layer=nn.LayerNorm,
         init_std=0.02,
-        img_size=(224, 224),
-        patch_size=16,
+        predictor_embed_dim=384,
         **kwargs
     ):
         super().__init__()
@@ -249,11 +248,13 @@ class VisionTransformerPredictor(nn.Module):
         self.mask_token = nn.Parameter(torch.zeros(1, 1, predictor_embed_dim))
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         # --
-        self.predictor_pos_embed = nn.Parameter(torch.zeros(1, num_patches, predictor_embed_dim),
-                                                requires_grad=False)
-        predictor_pos_embed = get_2d_sincos_pos_embed(self.predictor_pos_embed.shape[-1],
-                                                      (img_size[0] // patch_size, img_size[1] // patch_size),
-                                                      cls_token=False)
+        self.predictor_pos_embed = nn.Parameter(
+            torch.zeros(1, max_patches, predictor_embed_dim),
+            requires_grad=False)
+        predictor_pos_embed = get_2d_sincos_pos_embed(
+            self.predictor_pos_embed.shape[-1],
+            (max_patches ** -2, max_patches ** -2),
+            cls_token=False)
         self.predictor_pos_embed.data.copy_(torch.from_numpy(predictor_pos_embed).float().unsqueeze(0))
         # --
         self.predictor_blocks = nn.ModuleList([
@@ -299,11 +300,17 @@ class VisionTransformerPredictor(nn.Module):
         if not isinstance(masks, list):
             masks = [masks]
 
-        # -- Batch Size
-        B = len(x) // len(masks_x)
-
+        # [C, W, H] -> [N, D]
+        grid_sizes = [( img.shape[1] // self.patch_embed.patch_size,
+                        img.shape[2] // self.patch_embed.patch_size ) for img in x]
         # -- map from encoder-dim to pedictor-dim
-        x = self.predictor_embed(x)
+        x = [self.predictor_embed(curr) for curr in x]
+
+        # -- Batch Size
+        B, N, D = len(x), self.patch_embed.num_patches, self.embed_dim
+
+        # TODO
+        X_pos_embed = self.interpolate_pos_encoding(x, self.predictor_pos_embed, grid_sizes)
 
         # -- add positional embedding to x tokens
         x_pos_embed = self.predictor_pos_embed.repeat(B, 1, 1)
@@ -333,18 +340,36 @@ class VisionTransformerPredictor(nn.Module):
 
         return x
 
+    def interpolate_pos_encoding(self, x, pos_embed, grid_sizes):
+        B, N, D = x.shape
+        grid_h = grid_w = int(math.sqrt(pos_embed.shape[1]))
+        # Position embeddings [D, N] -> [1, D, sqrt(N), sqrt(N)]
+        pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
+        output = torch.zeros(B, N, D, device=self.pos_embed.device)
+
+        for i in range(B):
+            h, w = grid_sizes[i]
+            pos_embed_interp = nn.functional.interpolate(
+                pos_embed_2d,
+                size=(h, w),
+                mode='bicubic',
+                align_corners=False
+            )
+            # [1, D, h, w] -> [1, h*w, D]
+            pos_embed_interp = pos_embed_interp.permute(0, 2, 3, 1).reshape(1, h * w, D)
+            output[i, :h*w, :] = pos_embed_interp
+
+        return output
+
 
 class VisionTransformer(nn.Module):
     """ Vision Transformer """
     def __init__(
         self,
-        img_size=(224, 224),
+        max_patches,
         patch_size=16,
-        in_chans=3,
         embed_dim=768,
-        predictor_embed_dim=384,
         depth=12,
-        predictor_depth=12,
         num_heads=12,
         mlp_ratio=4.0,
         qkv_bias=True,
@@ -354,12 +379,12 @@ class VisionTransformer(nn.Module):
         drop_path_rate=0.0,
         norm_layer=nn.LayerNorm,
         init_std=0.02,
+        in_chans=3,
         **kwargs
     ):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
         self.num_heads = num_heads
-        max_patches = (img_size[0] // patch_size) * (img_size[1] // patch_size)
         # --
         self.patch_embed = PatchEmbed(
             num_patches=max_patches,
@@ -367,10 +392,13 @@ class VisionTransformer(nn.Module):
             in_chans=in_chans,
             embed_dim=embed_dim)
         # --
-        self.pos_embed = nn.Parameter(torch.zeros(1, max_patches, embed_dim), requires_grad=False)
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1],
-                                            (img_size[0] // patch_size, img_size[1] // patch_size),
-                                            cls_token=False)
+        self.pos_embed = nn.Parameter(
+            torch.zeros(1, max_patches, embed_dim),
+            requires_grad=False)
+        pos_embed = get_2d_sincos_pos_embed(
+            self.pos_embed.shape[-1],
+            (max_patches ** -2, max_patches ** -2),
+            cls_token=False)
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         # --
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
@@ -413,8 +441,8 @@ class VisionTransformer(nn.Module):
 
         # -- patchify x
         # [C, W, H] -> [N, D]
-        grid_sizes = [(img.shape[1] // self.patch_embed.patch_size,
-                 img.shape[2] // self.patch_embed.patch_size) for img in x]
+        grid_sizes = [( img.shape[1] // self.patch_embed.patch_size,
+                        img.shape[2] // self.patch_embed.patch_size ) for img in x]
         x = [self.patch_embed(curr) for curr in x]
         B, N, D = len(x), self.patch_embed.num_patches, self.embed_dim
 

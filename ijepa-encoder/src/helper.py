@@ -93,17 +93,17 @@ def init_model(
     pred_depth=6,
     pred_emb_dim=384
 ):
+    max_patches = (crop_size // patch_size) ** 2
     encoder = vit.__dict__[model_name](
-        img_size=[crop_size, crop_size],
+        max_patches=max_patches,
         patch_size=patch_size)
     predictor = vit.__dict__['vit_predictor'](
-        num_patches=encoder.patch_embed.num_patches,
+        max_patches=max_patches,
+        patch_size=patch_size,
         embed_dim=encoder.embed_dim,
         predictor_embed_dim=pred_emb_dim,
         depth=pred_depth,
-        num_heads=encoder.num_heads,
-        img_size=[crop_size, crop_size],
-        patch_size=patch_size)
+        num_heads=encoder.num_heads)
 
     def init_weights(m):
         if isinstance(m, torch.nn.Linear):
