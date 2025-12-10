@@ -244,6 +244,7 @@ class VisionTransformerPredictor(nn.Module):
         **kwargs
     ):
         super().__init__()
+        self.patch_size = patch_size
         self.predictor_embed = nn.Linear(embed_dim, predictor_embed_dim, bias=True)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, predictor_embed_dim))
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
@@ -253,7 +254,7 @@ class VisionTransformerPredictor(nn.Module):
             requires_grad=False)
         predictor_pos_embed = get_2d_sincos_pos_embed(
             self.predictor_pos_embed.shape[-1],
-            (max_patches ** -2, max_patches ** -2),
+            (int(max_patches**.5), int(max_patches**.5)),
             cls_token=False)
         self.predictor_pos_embed.data.copy_(torch.from_numpy(predictor_pos_embed).float().unsqueeze(0))
         # --
@@ -300,23 +301,43 @@ class VisionTransformerPredictor(nn.Module):
         if not isinstance(masks, list):
             masks = [masks]
 
+        # masks_x = encoder masks (4x1), size varies, < 256
+        # masks = predictor masks (4x4), size varies, < 256
+
         # [C, W, H] -> [N, D]
-        grid_sizes = [( img.shape[1] // self.patch_embed.patch_size,
-                        img.shape[2] // self.patch_embed.patch_size ) for img in x]
+        grid_sizes = [( img.shape[1] // self.patch_size,
+                        img.shape[2] // self.patch_size ) for img in x]
         # -- map from encoder-dim to pedictor-dim
         x = [self.predictor_embed(curr) for curr in x]
 
         # -- Batch Size
-        B, N, D = len(x), self.patch_embed.num_patches, self.embed_dim
+        B, N, D = len(x), self.num_patches, self.embed_dim
+
+        # -- Pad x to max_patches if needed, build attention mask
+        attention_mask = torch.ones(B, N, device=self.pos_embed.device).bool()
+        for i, img in enumerate(x):
+            if img.shape[1] < N:
+                padding = torch.zeros(1, N - img.shape[1], D, device=self.pos_embed.device)
+                x[i] = torch.cat([img, padding], dim=1)
+                attention_mask[i, -padding.shape[1]:] = 0
 
         # TODO
         X_pos_embed = self.interpolate_pos_encoding(x, self.predictor_pos_embed, grid_sizes)
+        x = x + X_pos_embed
 
-        # -- add positional embedding to x tokens
-        x_pos_embed = self.predictor_pos_embed.repeat(B, 1, 1)
-        x += apply_masks(x_pos_embed, masks_x)
+        if masks is not None:
+            # Adjust attention mask to only survive where there are masks
+            for i, mask in enumerate(masks):
+                # Create a mask for the current batch element
+                current_mask = torch.zeros(N, dtype=torch.bool, device=self.pos_embed.device)
+                current_mask[tuple(mask)] = True
+                # Apply the mask to the attention mask
+                attention_mask[i] &= current_mask
 
-        _, N_ctxt, D = x.shape
+            # Also apply mask to embeddings
+            # TODO: Is this even necessary?
+            masks = [[mask[i] for mask in masks] for i in range(len(masks[0]))]
+            x = apply_masks(x, masks)
 
         # -- concat mask tokens to x
         pos_embs = self.predictor_pos_embed.repeat(B, 1, 1)
@@ -397,7 +418,7 @@ class VisionTransformer(nn.Module):
             requires_grad=False)
         pos_embed = get_2d_sincos_pos_embed(
             self.pos_embed.shape[-1],
-            (max_patches ** -2, max_patches ** -2),
+            (int(max_patches**.5), int(max_patches**.5)),
             cls_token=False)
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
         # --
