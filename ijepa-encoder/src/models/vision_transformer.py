@@ -244,7 +244,9 @@ class VisionTransformerPredictor(nn.Module):
         **kwargs
     ):
         super().__init__()
+        self.max_patches = max_patches
         self.patch_size = patch_size
+        self.embed_dim = embed_dim
         self.predictor_embed = nn.Linear(embed_dim, predictor_embed_dim, bias=True)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, predictor_embed_dim))
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
@@ -292,7 +294,7 @@ class VisionTransformerPredictor(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, x, masks_x, masks):
+    def forward(self, x, grids, masks_x, masks):
         assert (masks is not None) and (masks_x is not None), 'Cannot run predictor without mask indices'
 
         if not isinstance(masks_x, list):
@@ -301,73 +303,81 @@ class VisionTransformerPredictor(nn.Module):
         if not isinstance(masks, list):
             masks = [masks]
 
-        # masks_x = encoder masks (4x1), size varies, < 256
-        # masks = predictor masks (4x4), size varies, < 256
-
-        # [C, W, H] -> [N, D]
-        grid_sizes = [( img.shape[1] // self.patch_size,
-                        img.shape[2] // self.patch_size ) for img in x]
-        # -- map from encoder-dim to pedictor-dim
-        x = [self.predictor_embed(curr) for curr in x]
+        # -- Context encoder embeddings [B, N, D-enc] to predictor [B, N, D-pred] embeddings
+        x = self.predictor_embed(x)
 
         # -- Batch Size
-        B, N, D = len(x), self.num_patches, self.embed_dim
+        B, N, D = x.size()
 
-        # -- Pad x to max_patches if needed, build attention mask
-        attention_mask = torch.ones(B, N, device=self.pos_embed.device).bool()
-        for i, img in enumerate(x):
-            if img.shape[1] < N:
-                padding = torch.zeros(1, N - img.shape[1], D, device=self.pos_embed.device)
-                x[i] = torch.cat([img, padding], dim=1)
-                attention_mask[i, -padding.shape[1]:] = 0
+        # -- Create attention mask [B, N * 2] (for prediction tokens)
+        attention_mask = torch.ones(size=(B, N * 2), device=x.device).bool()
 
-        # TODO
-        X_pos_embed = self.interpolate_pos_encoding(x, self.predictor_pos_embed, grid_sizes)
-        x = x + X_pos_embed
+        # -- Padding is attention masked
+        for i, (h, w) in enumerate(grids):
+            if h * w < N:
+                attention_mask[i, -(N - (h * w)):] = False
 
-        if masks is not None:
-            # Adjust attention mask to only survive where there are masks
-            for i, mask in enumerate(masks):
-                # Create a mask for the current batch element
-                current_mask = torch.zeros(N, dtype=torch.bool, device=self.pos_embed.device)
-                current_mask[tuple(mask)] = True
-                # Apply the mask to the attention mask
-                attention_mask[i] &= current_mask
+        # -- Add position embeddings, depending on grid size of each image
+        x_pos_embed = self.interpolate_pos_encoding(x, self.predictor_pos_embed, grids)
+        x = x + x_pos_embed
 
-            # Also apply mask to embeddings
-            # TODO: Is this even necessary?
-            masks = [[mask[i] for mask in masks] for i in range(len(masks[0]))]
-            x = apply_masks(x, masks)
+        # -- Attention mask the context encoder outputs
+        # TODO: Only works for nenc=1
+        for i, encs in enumerate(masks_x):
+            # Create a mask for the current batch element
+            current_mask = torch.zeros(size=(N,), device=x.device).bool()
+            current_mask[tuple(encs)] = True
+            # Apply the mask to the attention mask
+            attention_mask[i][:self.max_patches] &= current_mask
 
-        # -- concat mask tokens to x
+        # Also apply mask to embeddings
+        # TODO: Fix really ugly code & only works for nenc=1
+        masks_x = [[masks_x[i][0] for mask in masks_x] for i in range(len(masks_x[0]))]
+        x = apply_masks(x, masks_x)
+
+        # -- Create position embeddings for prediction tokens
         pos_embs = self.predictor_pos_embed.repeat(B, 1, 1)
         pos_embs = apply_masks(pos_embs, masks)
         pos_embs = repeat_interleave_batch(pos_embs, B, repeat=len(masks_x))
-        # --
+
+        # -- Create prediction tokens, add position embeddings
         pred_tokens = self.mask_token.repeat(pos_embs.size(0), pos_embs.size(1), 1)
-        # --
         pred_tokens += pos_embs
+
+        attention_mask = attention_mask.repeat(len(masks), 1)
+
+        for i, preds in enumerate(masks):
+            for j, mask in enumerate(preds):
+                # Create a mask for the current batch element
+                current_mask = torch.zeros(size=(N,), device=x.device).bool()
+                current_mask[mask] = True
+                # Apply the mask to the attention mask
+                attention_mask[(len(masks) * i) + j][self.max_patches:] &= current_mask
+                pred_tokens[(len(masks) * i) + j] *= current_mask.unsqueeze(-1).repeat(1, D)
+
         x = x.repeat(len(masks), 1, 1)
         x = torch.cat([x, pred_tokens], dim=1)
 
         # -- fwd prop
         for blk in self.predictor_blocks:
-            x = blk(x)
+            x = blk(x, attention_mask=attention_mask)
         x = self.predictor_norm(x)
 
         # -- return preds for mask tokens
-        x = x[:, N_ctxt:]
+        x = x[:, self.max_patches:]
         x = self.predictor_proj(x)
 
-        return x
+        return (x * attention_mask[:,self.max_patches:].unsqueeze(-1))
 
     def interpolate_pos_encoding(self, x, pos_embed, grid_sizes):
         B, N, D = x.shape
         grid_h = grid_w = int(math.sqrt(pos_embed.shape[1]))
+
         # Position embeddings [D, N] -> [1, D, sqrt(N), sqrt(N)]
         pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
-        output = torch.zeros(B, N, D, device=self.pos_embed.device)
+        output = torch.zeros(B, N, D, device=x.device)
 
+        # Interpolate embeddings for each patch grid size
         for i in range(B):
             h, w = grid_sizes[i]
             pos_embed_interp = nn.functional.interpolate(
@@ -376,7 +386,7 @@ class VisionTransformerPredictor(nn.Module):
                 mode='bicubic',
                 align_corners=False
             )
-            # [1, D, h, w] -> [1, h*w, D]
+            # [1, D, H, W] -> [1, H * W, D]
             pos_embed_interp = pos_embed_interp.permute(0, 2, 3, 1).reshape(1, h * w, D)
             output[i, :h*w, :] = pos_embed_interp
 
@@ -455,15 +465,12 @@ class VisionTransformer(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, x, masks=None):
+    def forward(self, x, grids, masks=None):
         if masks is not None:
             if not isinstance(masks, list):
                 masks = [masks]
 
-        # -- patchify x
-        # [C, W, H] -> [N, D]
-        grid_sizes = [( img.shape[1] // self.patch_embed.patch_size,
-                        img.shape[2] // self.patch_embed.patch_size ) for img in x]
+        # -- patchify x [B, C, W, H] -> [B, N, D]
         x = [self.patch_embed(curr) for curr in x]
         B, N, D = len(x), self.patch_embed.num_patches, self.embed_dim
 
@@ -479,7 +486,7 @@ class VisionTransformer(nn.Module):
         x = torch.cat(x)
 
         # -- Interpolate positional encoding
-        pos_embed = self.interpolate_pos_encoding(x, self.pos_embed, grid_sizes)
+        pos_embed = self.interpolate_pos_encoding(x, self.pos_embed, grids)
 
         # -- Add positional embedding to x
         x = x + pos_embed

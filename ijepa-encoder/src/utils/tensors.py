@@ -52,8 +52,11 @@ def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
 
 def apply_masks(x, masks):
     """
+    Applies masks to a batch of input sequences.
+
     :param x: tensor of shape [B (batch-size), N (num-patches), D (feature-dim)]
     :param masks: list of tensors containing indices of patches in [N] to keep
+    :return: tensor of shape [B, N, D], where masked patches have been set to zero
     """
     all_x = []
     for m in masks:
@@ -66,6 +69,15 @@ def apply_masks(x, masks):
 
 
 def repeat_interleave_batch(x, B, repeat):
+    """
+    This function takes a tensor and repeats it along the batch dimension.
+    The batch dimension is assumed to be the first dimension of the tensor.
+
+    :param x: Input tensor of shape [B (batch-size), N (num-patches), D (feature-dim)]
+    :param B: Original batch size
+    :param repeat: Number of times to repeat the tensor along the batch dimension
+    :return: Output tensor of shape [B * repeat, N, D]
+    """
     N = len(x) // B
     x = torch.cat([
         torch.cat([x[i*B:(i+1)*B] for _ in range(repeat)], dim=0)

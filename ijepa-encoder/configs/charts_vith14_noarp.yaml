@@ -12,9 +12,9 @@ data:
   use_color_distortion: false
   use_gaussian_blur: false
   use_horizontal_flip: false
-  preserve_aspect_ratio: true
+  preserve_aspect_ratio: false
 logging:
-  folder: /leonardo_scratch/large/userexternal/aepple00/outputs/
+  folder: /leonardo_scratch/large/userexternal/aepple00/output-noarp/
   write_tag: jepa
 mask:
   allow_overlap: false
@@ -45,7 +45,7 @@ optimization:
   ema:
   - 0.996
   - 1.0
-  epochs: 66
+  epochs: 50
   final_lr: 1.0e-06
   final_weight_decay: 0.4
   ipe_scale: 1.0
