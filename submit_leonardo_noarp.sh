@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=train-noarp          # job name
-#SBATCH --time=12:00:00                 # time limit
+#SBATCH --time=24:00:00                 # time limit
 #SBATCH --nodes=1                       # 1 node
 #SBATCH --gres=gpu:4                    # 4 GPUs
 #SBATCH --mem=220GB                     # 55GB per GPU x 4 GPUs = 220GB total
@@ -9,7 +9,7 @@
 #SBATCH --output=slurm_logs/logs-%j.out # standard output file
 #SBATCH --error=slurm_logs/logs-%j.err  # standard error file
 #SBATCH --partition=boost_usr_prod      # partition name
-#SBATCH --qos=boost_qos_bprod           # QoS for up to 1 days
+#SBATCH --qos=boost_qos_lprod           # QoS for up to 1 days
 
 # Load any required modules
 module load profile/deeplrn
