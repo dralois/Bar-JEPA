@@ -82,8 +82,7 @@ class SimpleDecoder(nn.Module):
         :return: estimated heatmaps for each keypoint, shape: [B, C_out, H*4, W*4]
         """
         # Upsample feature maps by 4 times with bilinear interpolation
-        x = F.interpolate(x, scale_factor=4, mode='bilinear', align_corners=True)
-        x = F.relu(x)
+        x = F.interpolate(F.relu_(x), scale_factor=4, mode='bilinear', align_corners=False)
         heatmaps = self.final_layer(x)
         return heatmaps
 
