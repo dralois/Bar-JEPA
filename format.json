@@ -7,10 +7,22 @@
     "bbox": {
       "type": "array",
       "items": [
-        {"type": "integer", "description": "Top-left x-coordinate of the bounding box."},
-        {"type": "integer", "description": "Top-left y-coordinate of the bounding box."},
-        {"type": "integer", "description": "Bottom-right x-coordinate of the bounding box."},
-        {"type": "integer", "description": "Bottom-right y-coordinate of the bounding box."}
+        {
+          "type": "integer",
+          "description": "Top-left x-coordinate of the bounding box."
+        },
+        {
+          "type": "integer",
+          "description": "Top-left y-coordinate of the bounding box."
+        },
+        {
+          "type": "integer",
+          "description": "Bottom-right x-coordinate of the bounding box."
+        },
+        {
+          "type": "integer",
+          "description": "Bottom-right y-coordinate of the bounding box."
+        }
       ],
       "description": "Bounding box coordinates as [x1, y1, x2, y2]."
     },
@@ -25,7 +37,10 @@
           "$ref": "#/$defs/bbox"
         }
       },
-      "required": ["text", "bbox"]
+      "required": [
+        "text",
+        "bbox"
+      ]
     },
     "legendEntry": {
       "type": "object",
@@ -40,7 +55,10 @@
           "description": "Bounding box coordinates for the colored patch in the legend."
         }
       },
-      "required": ["feature", "patch"]
+      "required": [
+        "feature",
+        "patch"
+      ]
     }
   },
   "properties": {
@@ -53,7 +71,10 @@
         },
         "type": {
           "type": "string",
-          "enum": ["vertical", "horizontal"],
+          "enum": [
+            "vertical",
+            "horizontal"
+          ],
           "description": "Type of chart (bar for vertical, barh for horizontal)."
         },
         "bar_width": {
@@ -75,10 +96,31 @@
               "description": "Bounding box coordinates for the legend."
             }
           },
-          "required": ["entries", "bbox"]
+          "required": [
+            "entries",
+            "bbox"
+          ]
+        },
+        "origin": {
+          "type": "object",
+          "properties": {
+            "bbox": {
+              "$ref": "#/$defs/bbox",
+              "description": "Bounding box for the coordinate origin."
+            }
+          },
+          "required": [
+            "bbox"
+          ]
         }
       },
-      "required": ["title", "type", "bar_width", "legend"]
+      "required": [
+        "title",
+        "type",
+        "bar_width",
+        "legend",
+        "origin"
+      ]
     },
     "data": {
       "type": "object",
@@ -96,12 +138,28 @@
             "ticks": {
               "type": "array",
               "items": {
-                  "$ref": "#/$defs/text"
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "$ref": "#/$defs/text"
+                  },
+                  "bbox": {
+                    "$ref": "#/$defs/bbox"
+                  }
+                },
+                "required": [
+                  "label",
+                  "bbox"
+                ]
               },
-              "description": "Ticks on the category axis, as text objects with optional bounding boxes."
+              "description": "Ticks on the category axis, as objects containing a label (text) and bbox (bounding box)."
             }
           },
-          "required": ["label", "bbox", "ticks"]
+          "required": [
+            "label",
+            "bbox",
+            "ticks"
+          ]
         },
         "value_axis": {
           "type": "object",
@@ -123,12 +181,30 @@
             "ticks": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/text"
+                "type": "object",
+                "properties": {
+                  "label": {
+                    "$ref": "#/$defs/text"
+                  },
+                  "bbox": {
+                    "$ref": "#/$defs/bbox"
+                  }
+                },
+                "required": [
+                  "label",
+                  "bbox"
+                ]
               },
-              "description": "Ticks on the value axis, as text objects with optional bounding boxes."
+              "description": "Ticks on the value axis, as objects containing a label (text) and bbox (bounding box)."
             }
           },
-          "required": ["label", "min_value", "max_value", "bbox", "ticks"]
+          "required": [
+            "label",
+            "min_value",
+            "max_value",
+            "bbox",
+            "ticks"
+          ]
         },
         "features": {
           "type": "array",
@@ -156,19 +232,32 @@
                       "$ref": "#/$defs/bbox"
                     }
                   },
-                  "required": ["category", "value", "bbox"]
+                  "required": [
+                    "category",
+                    "value",
+                    "bbox"
+                  ]
                 },
                 "description": "Data points for the features, with optional bar bounding boxes."
               }
             },
-            "required": ["feature", "data"]
+            "required": [
+              "feature",
+              "data"
+            ]
           },
           "description": "Data features in the chart, each with a name (as a text object), and data points with optional bar bounding boxes."
         }
       },
-      "required": ["category_axis", "value_axis", "features"]
+      "required": [
+        "category_axis",
+        "value_axis",
+        "features"
+      ]
     }
   },
-  "required": ["chart_metadata", "data"]
+  "required": [
+    "chart_metadata",
+    "data"
+  ]
 }
-

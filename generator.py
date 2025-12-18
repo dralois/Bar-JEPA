@@ -164,14 +164,18 @@ def get_random_plot(filename):
         bar_generator = ax.barh
         set_hticks = ax.set_yticks
         set_hticklabels = ax.set_yticklabels
+        get_hticklines = ax.get_yticklines
         get_vticklabels = ax.get_xticklabels
+        get_vticklines = ax.get_xticklines
         # if the bars are horizontal, invert the y axis
         ax.invert_yaxis()
     else:
         bar_generator = ax.bar
         set_hticks = ax.set_xticks
         set_hticklabels = ax.set_xticklabels
+        get_hticklines = ax.get_xticklines
         get_vticklabels = ax.get_yticklabels
+        get_vticklines = ax.get_yticklines
 
     colors = plt.colormaps[random.choice(list(plt.colormaps))](np.random.rand(bar_per_loc))
     linewidth = random.choice([0, 1])
@@ -232,10 +236,13 @@ def get_random_plot(filename):
     # set the ticks and tick labels
     set_hticks(x + (bar_width / 2) * bar_per_loc)
     hticklabels = set_hticklabels(ticks_label, fontproperties=ticks_label_font)
+    hticklines = get_hticklines()
     vticklabels = get_vticklabels()
+    vticklines = get_vticklines()
     for label in vticklabels:
         label.set_fontproperties(ticks_label_font)
-    axis_ticks = {"value": vticklabels, "category": hticklabels}
+    axis_ticks = {"value": zip(vticklabels, vticklines),
+                  "category": zip(hticklabels, hticklines)}
 
     # set legend, possible positions include: top, bottom, upper right and center right
     ax_bbox = ax.get_position()
@@ -325,16 +332,18 @@ def build_tick_annotations(fig_height, axes, axis_ticks):
         return ti
 
     ti["value"]["bbox"] = compute_bbox(fig_height, axes.yaxis.get_tightbbox())
-    for e in axis_ticks["value"]:
-        text = e.get_text()
-        b_cor = compute_bbox(fig_height, e.get_tightbbox())
-        ti["value"]["entries"].append({"bbox": b_cor, "text": text})
+    for lbl, ln in axis_ticks["value"]:
+        text = lbl.get_text()
+        lbl_cor = compute_bbox(fig_height, lbl.get_tightbbox())
+        ln_cor = compute_bbox(fig_height, ln.get_tightbbox())
+        ti["value"]["entries"].append({"bbox": lbl_cor, "text": text, "tick": ln_cor})
 
     ti["category"]["bbox"] = compute_bbox(fig_height, axes.xaxis.get_tightbbox())
-    for e in axis_ticks["category"]:
-        text = e.get_text()
-        b_cor = compute_bbox(fig_height, e.get_tightbbox())
-        ti["category"]["entries"].append({"bbox": b_cor, "text": text})
+    for lbl, ln in axis_ticks["category"]:
+        text = lbl.get_text()
+        lbl_cor = compute_bbox(fig_height, lbl.get_tightbbox())
+        ln_cor = compute_bbox(fig_height, ln.get_tightbbox())
+        ti["category"]["entries"].append({"bbox": lbl_cor, "text": text, "tick": ln_cor})
 
     return ti
 
@@ -442,6 +451,9 @@ def annotate(plot_objs):
                         } for e in legend_ann["entries"]
                     ],
                     "bbox": legend_ann["bbox"]
+                },
+                "origin": {
+                    "bbox": tick_ann["value"]["entries"][0]["tick"]
                 }
             },
             "data": {
@@ -452,8 +464,11 @@ def annotate(plot_objs):
                     },
                     "ticks": [
                         {
-                            "text": e["text"],
-                            "bbox": e["bbox"]
+                            "label": {
+                                "text": e["text"],
+                                "bbox": e["bbox"],
+                            },
+                            "bbox": e["tick"]
                         } for e in tick_ann["category"]["entries"]
                     ],
                     "bbox": tick_ann["category"]["bbox"]
@@ -465,8 +480,11 @@ def annotate(plot_objs):
                     },
                     "ticks": [
                         {
-                            "text": e["text"],
-                            "bbox": e["bbox"]
+                            "label": {
+                                "text": e["text"],
+                                "bbox": e["bbox"],
+                            },
+                            "bbox": e["tick"]
                         } for e in tick_ann["value"]["entries"]
                     ],
                     "min_value": bar_ann["min_value"],
@@ -492,7 +510,7 @@ def bbox_one_line(json_str):
     """
     Rewrites multi-line bbox to be one line
     """
-    bbox_pattern = re.compile(r'"bbox":\s*\[([^\]]+)\]', re.DOTALL)
+    bbox_pattern = re.compile(r'"(?:bbox|origin)":\s*\[([^\]]+)\]', re.DOTALL)
     return bbox_pattern.sub(lambda m: f'"bbox": [{",".join([x.strip() for x in m.group(1).split(",")])}]', json_str)
 
 
