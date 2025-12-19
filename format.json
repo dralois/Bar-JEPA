@@ -101,6 +101,18 @@
             "bbox"
           ]
         },
+        "size": {
+          "type": "object",
+          "properties": {
+            "bbox": {
+              "$ref": "#/$defs/bbox",
+              "description": "Bounding box for the entire chart."
+            }
+          },
+          "required": [
+            "bbox"
+          ]
+        },
         "origin": {
           "type": "object",
           "properties": {

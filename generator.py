@@ -452,6 +452,9 @@ def annotate(plot_objs):
                     ],
                     "bbox": legend_ann["bbox"]
                 },
+                "size": {
+                    "bbox": [0, 0, imgsize[0], imgsize[1]]
+                },
                 "origin": {
                     "bbox": tick_ann["value"]["entries"][0]["tick"]
                 }

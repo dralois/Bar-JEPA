@@ -222,7 +222,6 @@ class ConvEmbed(nn.Module):
         return p.flatten(2).transpose(1, 2)
 
 
-# TODO: Rewrite for arbirary grid size
 class VisionTransformerPredictor(nn.Module):
     """ Vision Transformer """
     def __init__(

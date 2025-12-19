@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.utils.tensors import trunc_normal_
+
 
 class ClassicDecoder(nn.Module):
     def __init__(self, in_channels=1280, out_channels=64):
@@ -87,8 +89,15 @@ class SimpleDecoder(nn.Module):
         return heatmaps
 
 
-class CombinedKeypointDetector(nn.Module):
-    def __init__(self, in_channels=1280, num_keypoints=64, num_classes=3, decoder_type='simple'):
+class KeypointDetector(nn.Module):
+    def __init__(
+        self,
+        in_channels=1280,
+        num_keypoints=64,
+        num_classes=3,
+        decoder_type='simple',
+        init_std=0.02,
+    ):
         """
         Combined keypoint detector with classification and regression heads.
 
@@ -108,12 +117,28 @@ class CombinedKeypointDetector(nn.Module):
         elif decoder_type == 'classic':
             self.decoder = ClassicDecoder(in_channels, num_keypoints)
         else:
-            raise ValueError("decoder_type must be 'simple' or 'classic'")
+            raise ValueError(f'Unknown decoder type {decoder_type}')
 
         self.fc_cls = nn.Conv2d(num_keypoints, num_classes, 1, 1, 0)  # Predicts class probabilities
         self.fc_reg = nn.Conv2d(num_keypoints, 2, 1, 1, 0)  # Predicts (dx, dy) offsets
 
         self.drop_layer = nn.Dropout(p=0.5)
+
+        self.init_std = init_std
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=self.init_std)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=self.init_std)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         """
