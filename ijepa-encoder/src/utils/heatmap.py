@@ -1,11 +1,34 @@
-import math
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import numpy as np
 
-id_to_name = {0: 'None', 1: 'bar', 2: 'tick'}
-name_to_id = {'None': 0, 'bar': 1, 'tick': 2}
+def cls_pts_to_map(cls_pts_lists, mapsize):
+    """
+    Converts a list of points of different classes
+    to maps of point classes and regression values.
 
+    :param cls_pts_lists: List of lists containing normalized points for each class.
+    :param mapsize: (w, h) size of the output maps.
+    :return: Tuple containing map with class IDs and x and y regression values (offsets).
+    """
+
+    # Make maps of size [H, W], [2, H, W]
+    cls_map = torch.zeros((mapsize[1], mapsize[0]), dtype=torch.int32)
+    reg_map = torch.zeros((2, mapsize[1], mapsize[0]))
+
+    # [bars, ticks] -> Class 1, 2
+    for cls_id, cls_list in enumerate(cls_pts_lists):
+        for point in cls_list:
+            # Compute map coordinates and regression values
+            pos = torch.floor(point * mapsize).type(torch.int32)
+            reg = point * mapsize - pos - 0.5
+
+            # Maps are transposed
+            cls_map[pos[1], pos[0]] = cls_id + 1
+            reg_map[:, pos[1], pos[0]] = reg
+
+    return cls_map, reg_map
+
+# TODO
 def pts_map_to_lists(pts_cls_map, pts_reg_map):
     bars = [[] for im in range(pts_cls_map.shape[0])]
     ticks = [[] for im in range(pts_cls_map.shape[0])]
@@ -22,14 +45,20 @@ def pts_map_to_lists(pts_cls_map, pts_reg_map):
         pos_x += reg[0] / classes.shape[2]
         pos_y += reg[1] / classes.shape[3]
 
-        if cls == name_to_id['bar']:
-            bars[im].append((pos_x, pos_y))
-        elif cls == name_to_id['tick']:
-            ticks[im].append((pos_x, pos_y))
+        match cls:
+            case 0: # Background
+                pass
+            case 1: # Bar
+                bars[im].append((pos_x, pos_y))
+            case 2: # Tick
+                ticks[im].append((pos_x, pos_y))
+            case _:
+                raise ValueError(f"Unknown class {cls}")
 
     return bars, ticks
 
-def get_pred_bars_ticks(pred_cls_map, pred_reg_map, pt_thresh=0.8, conf_thresh=0.5):
+# TODO
+def get_pred_bars_ticks(pred_cls_map, pred_reg_map, pt_thresh, conf_thresh):
     bars = [[] for im in range(pred_cls_map.shape[0])]
     ticks = [[] for im in range(pred_cls_map.shape[0])]
 
@@ -59,7 +88,8 @@ def get_pred_bars_ticks(pred_cls_map, pred_reg_map, pt_thresh=0.8, conf_thresh=0
 
     return bars, ticks
 
-def nms(bars, ticks, thresh=1.5 / 56):
+# TODO
+def nms(bars, ticks, thresh):
     nms_bars = [[] for im in range(len(bars))]
     nms_ticks = [[] for im in range(len(ticks))]
 
@@ -88,3 +118,53 @@ def nms(bars, ticks, thresh=1.5 / 56):
             nms_ticks[im].append(pt)
 
     return nms_bars, nms_ticks
+
+# TODO
+def evaluate_pts(gt_bars, gt_ticks, pred_bars, pred_ticks, dist_thresh):
+    bar_matches = [[((gb[0] - pb[1]) ** 2 + (gb[1] - pb[0]) ** 2) ** (0.5) if
+                    ((gb[0] - pb[1]) ** 2 + (gb[1] - pb[0]) ** 2) ** (0.5) < dist_thresh
+                    else 0
+                    for pb in pred_bars] for gb in gt_bars]
+    for i in range(len(gt_bars)):
+        min_dist = min([bm for bm in bar_matches[i] if bm > 0], default = 0.)
+        bar_matches[i] = [m if m <= min_dist else 0 for m in bar_matches[i]]
+
+    num_matches = np.count_nonzero(bar_matches)
+
+    bar_precision = (num_matches / len(pred_bars)) if len(pred_bars) != 0 else 0
+    bar_recall = (num_matches / len(gt_bars)) if len(gt_bars) != 0 else 0
+
+    tick_matches = [[((gt[0] - pt[1]) ** 2 + (gt[1] - pt[0]) ** 2) ** (0.5) if
+                     ((gt[0] - pt[1]) ** 2 + (gt[1] - pt[0]) ** 2) ** (0.5) < dist_thresh
+                     else 0
+                     for pt in pred_ticks] for gt in gt_ticks]
+    for i in range(len(gt_ticks)):
+        min_dist = min([tm for tm in tick_matches[i] if tm > 0], default = 0.)
+        tick_matches[i] = [m if m <= min_dist else 0 for m in tick_matches[i]]
+
+    num_matches = np.count_nonzero(tick_matches)
+
+    tick_precision = (num_matches / len(pred_ticks)) if len(pred_ticks) != 0 else 0
+    tick_recall = (num_matches / len(gt_ticks)) if len(gt_ticks) != 0 else 0
+
+    return bar_precision, bar_recall, tick_precision, tick_recall
+
+# TODO
+def evaluate_pts_err(gt_bars, gt_ticks, p_bars, p_ticks, dist_thresh):
+    bar_matches = [[((gb[0] - pb[1]) ** 2 + (gb[1] - pb[0]) ** 2) ** (0.5) if
+                    ((gb[0] - pb[1]) ** 2 + (gb[1] - pb[0]) ** 2) ** (0.5) < dist_thresh
+                    else 0
+                    for pb in p_bars] for gb in gt_bars]
+    min_bar_dists = [min([bm for bm in row if bm > 0], default = 0.) for row in bar_matches]
+    
+    tick_matches = [[((gt[0] - pt[1]) ** 2 + (gt[1] - pt[0]) ** 2) ** (0.5) if
+                     ((gt[0] - pt[1]) ** 2 + (gt[1] - pt[0]) ** 2) ** (0.5) < dist_thresh
+                     else 0
+                     for pt in p_ticks] for gt in gt_ticks]
+    min_tick_dists = [min([tm for tm in row if tm > 0], default = 0.) for row in tick_matches]
+    
+    return sum(min_bar_dists) + sum(min_tick_dists)
+
+
+def f1(precision, recall):
+    return (2. * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.

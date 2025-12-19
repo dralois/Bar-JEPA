@@ -23,6 +23,7 @@ def make_transforms(
     crop_size=224,
     crop_scale=(0.3, 1.0),
     color_jitter=1.0,
+    random_resize_crop=True,
     horizontal_flip=False,
     color_distortion=False,
     gaussian_blur=False,
@@ -47,6 +48,8 @@ def make_transforms(
     transform_list = []
     if preserve_aspect_ratio:
         transform_list += [ResizeToFixedPatches(max_patches=max_patches, patch_size=patch_size)]
+    elif not random_resize_crop:
+        transform_list += [transforms.Resize(crop_size)]
     else:
         transform_list += [transforms.RandomResizedCrop(crop_size, scale=crop_scale)]
     if horizontal_flip:

@@ -43,9 +43,9 @@ from src.utils.tensors import repeat_interleave_batch, apply_masks
 from src.datasets.imagenet1k import make_imagenet1k
 
 from src.helper import (
-    load_checkpoint,
-    init_model,
-    init_opt)
+    load_ijepa_checkpoint,
+    init_ijepa_model,
+    init_ijepa_opt)
 from src.transforms import make_transforms
 
 # --
@@ -158,7 +158,7 @@ def main(args, resume_preempt=False):
                            ('%d', 'time (ms)'))
 
     # -- init model
-    encoder, predictor = init_model(
+    encoder, predictor = init_ijepa_model(
         device=device,
         patch_size=patch_size,
         crop_size=crop_size,
@@ -204,7 +204,7 @@ def main(args, resume_preempt=False):
     ipe = len(unsupervised_loader)
 
     # -- init optimizer and scheduler
-    optimizer, scaler, scheduler, wd_scheduler = init_opt(
+    optimizer, scaler, scheduler, wd_scheduler = init_ijepa_opt(
         encoder=encoder,
         predictor=predictor,
         wd=wd,
@@ -230,7 +230,7 @@ def main(args, resume_preempt=False):
     start_epoch = 0
     # -- load training checkpoint
     if load_model:
-        encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
+        encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_ijepa_checkpoint(
             device=device,
             r_path=load_path,
             encoder=encoder,

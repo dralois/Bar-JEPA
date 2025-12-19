@@ -44,9 +44,9 @@ from src.utils.tensors import repeat_interleave_batch, apply_masks
 from src.datasets.charts import make_charts
 
 from src.helper import (
-    load_checkpoint,
-    init_model,
-    init_opt)
+    load_ijepa_checkpoint,
+    init_ijepa_model,
+    init_ijepa_opt)
 from src.transforms import make_transforms
 
 # --
@@ -77,27 +77,8 @@ def main(args, resume_preempt=False):
     ckpt_epoch = args['meta']['checkpoint_epoch']
     do_finetune = args['meta']['do_finetune']
     r_file = args['meta']['read_checkpoint']
-    copy_data = args['meta']['copy_data']
     pred_depth = args['meta']['pred_depth']
     pred_emb_dim = args['meta']['pred_emb_dim']
-    if not torch.cuda.is_available():
-        device = torch.device('cpu')
-    else:
-        device = torch.device('cuda:0')
-        torch.cuda.set_device(device)
-
-    # Check if bfloat16 is supported, if not fall back to float16 if bfloat16 was requested
-    autocast_dtype = torch.bfloat16 if use_bfloat16 else torch.float32
-
-    bfloat16_supported = False
-    try:
-        bfloat16_supported = torch.cuda.is_bf16_supported()
-    except RuntimeError:
-        bfloat16_supported = False
-
-    if not bfloat16_supported and use_bfloat16:
-        logger.info(f'Device does not support bfloat16, falling back to float16')
-        autocast_dtype = torch.float16
 
     # -- DATA
     use_gaussian_blur = args['data']['use_gaussian_blur']
@@ -111,6 +92,7 @@ def main(args, resume_preempt=False):
     num_workers = args['data']['num_workers']
     root_path = args['data']['root_path']
     image_folder = args['data']['image_folder']
+    annotation_folder = args['data']['image_folder']
     crop_size = args['data']['crop_size']
     crop_scale = args['data']['crop_scale']
     # --
@@ -147,6 +129,26 @@ def main(args, resume_preempt=False):
         yaml.dump(args, f)
     # ----------------------------------------------------------------------- #
 
+    # -- create device
+    if not torch.cuda.is_available():
+        device = torch.device('cpu') if not torch.mps.is_available() else torch.device('mps')
+    else:
+        device = torch.device('cuda:0')
+        torch.cuda.set_device(device)
+
+    # -- check bfloat16 support, otherwise fallback to float16
+    try:
+        autocast_dtype = torch.bfloat16 if (
+            use_bfloat16 and (
+                torch.cuda.is_bf16_supported() or
+                torch.cpu._is_avx512_bf16_supported()
+            )
+        ) else torch.float32
+    except Exception as e:
+        logger.warning(f'Error checking bfloat16 support: {e}. Falling back to float16')
+        autocast_dtype = torch.float16 if use_bfloat16 else torch.float32
+
+    # -- dataloader
     try:
         mp.set_start_method('spawn')
     except Exception:
@@ -176,13 +178,13 @@ def main(args, resume_preempt=False):
                            ('%d', 'time (ms)'))
 
     # -- init model
-    encoder, predictor = init_model(
+    encoder, predictor = init_ijepa_model(
         device=device,
+        model_name=model_name,
         patch_size=patch_size,
         crop_size=crop_size,
         pred_depth=pred_depth,
-        pred_emb_dim=pred_emb_dim,
-        model_name=model_name)
+        pred_emb_dim=pred_emb_dim)
     target_encoder = copy.deepcopy(encoder)
 
     # -- make data transforms
@@ -202,6 +204,7 @@ def main(args, resume_preempt=False):
         crop_size=crop_size,
         crop_scale=crop_scale,
         color_jitter=color_jitter,
+        random_resize_crop=True,
         horizontal_flip=use_horizontal_flip,
         color_distortion=use_color_distortion,
         gaussian_blur=use_gaussian_blur,
@@ -220,12 +223,13 @@ def main(args, resume_preempt=False):
             rank=rank,
             root_path=root_path,
             image_folder=image_folder,
+            annotation_folder=annotation_folder,
             training=True,
             drop_last=True)
     ipe = len(unsupervised_loader)
 
     # -- init optimizer and scheduler
-    optimizer, scaler, scheduler, wd_scheduler = init_opt(
+    optimizer, scaler, scheduler, wd_scheduler = init_ijepa_opt(
         encoder=encoder,
         predictor=predictor,
         iterations_per_epoch=ipe,
@@ -236,7 +240,6 @@ def main(args, resume_preempt=False):
         wd=wd,
         final_wd=final_wd,
         final_lr=final_lr,
-        device_type=device.type,
         use_bfloat16=use_bfloat16,
         ipe_scale=ipe_scale)
 
@@ -255,7 +258,7 @@ def main(args, resume_preempt=False):
     start_epoch = 0
     # -- load training checkpoint
     if load_model:
-        encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_checkpoint(
+        encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_ijepa_checkpoint(
             device=device,
             world_size=world_size,
             do_finetune=do_finetune,
@@ -293,7 +296,7 @@ def main(args, resume_preempt=False):
 
     # -- Initialize wandb
     run = wandb.init(
-        entity="bar-ijepa",
+        entity="bar-ijepa-finetune",
         mode='offline',
         config={
             'learning-rate': lr,
