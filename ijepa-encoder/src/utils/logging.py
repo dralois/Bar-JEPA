@@ -8,7 +8,7 @@
 import torch
 
 
-def gpu_timer(closure, log_timings=True):
+def gpu_timer(closure, log_timings=True, *args, **kwargs):
     """ Helper to time gpu-time to execute closure() """
     log_timings = log_timings and torch.cuda.is_available()
 
@@ -18,7 +18,7 @@ def gpu_timer(closure, log_timings=True):
         end = torch.cuda.Event(enable_timing=True)
         start.record()
 
-    result = closure()
+    result = closure(*args, **kwargs)
 
     if log_timings:
         end.record()

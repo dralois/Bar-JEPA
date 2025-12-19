@@ -143,7 +143,7 @@ def main(args, resume_preempt=False):
                 torch.cuda.is_bf16_supported() or
                 torch.cpu._is_avx512_bf16_supported()
             )
-        ) else torch.float32
+        ) else (torch.float16 if use_bfloat16 else torch.float32)
     except Exception as e:
         logger.warning(f'Error checking bfloat16 support: {e}. Falling back to float16')
         autocast_dtype = torch.float16 if use_bfloat16 else torch.float32

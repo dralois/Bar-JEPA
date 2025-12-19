@@ -7,8 +7,6 @@
 
 from logging import getLogger
 
-import torch
-
 _GLOBAL_SEED = 0
 logger = getLogger()
 
@@ -16,6 +14,9 @@ logger = getLogger()
 class DefaultCollator(object):
 
     def __call__(self, batch):
-
-        collated_batch = torch.utils.data.default_collate(batch)
-        return collated_batch, None, None
+        # [[img, [org, cls, reg]]]
+        imgs = [img for img, _ in batch]
+        gt_org = [t[0] for _, t in batch]
+        gt_cls = [t[1] for _, t in batch]
+        gt_reg = [t[2] for _, t in batch]
+        return imgs, (gt_org, gt_cls, gt_reg)

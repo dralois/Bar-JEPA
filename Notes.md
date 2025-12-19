@@ -13,4 +13,5 @@
 - [x] dataloader -> Integrate loading gt
 - [x] chart gen -> Tick marks & origin
 - [x] check if loader works, produces correct maps
-- [ ] add dataloader collator
+- [x] add dataloader collator
+- [ ] decoder -> dynamic grid size

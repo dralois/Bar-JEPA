@@ -10,7 +10,6 @@ try:
 except Exception:
     pass
 
-import copy
 import logging
 import sys
 import yaml
@@ -43,6 +42,8 @@ from src.utils.logging import (
     AverageMeter)
 
 from src.datasets.charts import make_charts
+
+from src.masks.default import DefaultCollator
 
 from src.helper import (
     load_decoder_checkpoint,
@@ -133,7 +134,7 @@ def main(args, resume_preempt=False):
                 torch.cuda.is_bf16_supported() or
                 torch.cpu._is_avx512_bf16_supported()
             )
-        ) else torch.float32
+        ) else (torch.float16 if use_bfloat16 else torch.float32)
     except Exception as e:
         logger.warning(f'Error checking bfloat16 support: {e}. Falling back to float16')
         autocast_dtype = torch.float16 if use_bfloat16 else torch.float32
@@ -186,10 +187,11 @@ def main(args, resume_preempt=False):
         patch_size=patch_size)
 
     # -- init data-loaders/samplers
+    collator = DefaultCollator()
     _, train_loader, train_sampler = make_charts(
             transform=transform,
             batch_size=batch_size,
-            collator=None,
+            collator=collator,
             pin_mem=pin_mem,
             num_workers=num_workers,
             world_size=world_size,
@@ -199,10 +201,10 @@ def main(args, resume_preempt=False):
             annotation_folder=annotation_folder,
             training=True,
             drop_last=True)
-    _, test_loader, test_sampler = make_charts(
+    _, val_loader, val_sampler = make_charts(
             transform=transform,
             batch_size=batch_size,
-            collator=None,
+            collator=collator,
             pin_mem=pin_mem,
             num_workers=num_workers,
             world_size=world_size,
@@ -261,7 +263,7 @@ def main(args, resume_preempt=False):
             'opt': optimizer.state_dict(),
             'scaler': None if scaler is None else scaler.state_dict(),
             'epoch': epoch,
-            'loss': loss_meter.avg,
+            'loss': loss_train_m.avg,
             'batch_size': batch_size,
             'world_size': world_size,
             'lr': lr
@@ -288,86 +290,111 @@ def main(args, resume_preempt=False):
     for epoch in range(start_epoch, num_epochs):
         logger.info(f'Epoch {epoch + 1}')
 
-        # TODO
-        # -- update distributed-data-loader epoch
+        # Update distributed-data-loader epoch
         train_sampler.set_epoch(epoch)
+        val_sampler.set_epoch(epoch)
 
         # Loss tracking
-        loss_meter = AverageMeter()
-        org_loss_meter = AverageMeter()
-        cls_loss_meter = AverageMeter()
-        reg_loss_meter = AverageMeter()
-        pts_loss_meter = AverageMeter()
-        alg_loss_meter = AverageMeter()
+        loss_train_m, loss_val_m = AverageMeter(), AverageMeter()
+        org_loss_train_m, org_loss_val_m = AverageMeter(), AverageMeter()
+        cls_loss_train_m, cls_loss_val_m = AverageMeter(), AverageMeter()
+        reg_loss_train_m, reg_loss_val_m = AverageMeter(), AverageMeter()
+        pts_loss_train_m, pts_loss_val_m = AverageMeter(), AverageMeter()
+        alg_loss_train_m, alg_loss_val_m = AverageMeter(), AverageMeter()
         time_meter = AverageMeter()
 
-        # Train loop
-        decoder.train()
-        for itr, (data, targets) in enumerate(train_loader):
+        def load_charts(data, targets):
+            gt_org, gt_cls, gt_reg = targets
+            imgs = [img.to(device, non_blocking=True) for img in data]
+            grids = [(img.shape[1] // patch_size, img.shape[2] // patch_size) for img in imgs]
+            gt_org = [gt.to(device, non_blocking=True) for gt in gt_org]
+            gt_cls = [gt.to(device, non_blocking=True) for gt in gt_cls]
+            gt_reg = [gt.to(device, non_blocking=True) for gt in gt_reg]
+            return (imgs, grids, gt_org, gt_cls, gt_reg)
 
-            # TODO
-            def load_charts():
-                gt_org, gt_cls, gt_reg = targets
-                imgs = data.to(device, non_blocking=True)
-                grids = torch.tensor([(img.shape[1] // patch_size, img.shape[2] // patch_size) for img in imgs])
-                gt_org = gt_org.to(device,non_blocking=True)
-                gt_cls = gt_cls.to(device,non_blocking=True)
-                gt_reg = gt_reg.to(device,non_blocking=True)
-                return (imgs, grids, gt_org, gt_cls, gt_reg)
-            imgs, grids, gt_org, gt_cls, gt_reg = load_charts()
+        def log_stats(epoch, itr, loss, etime, train):
+            csv_logger.log(epoch + 1, itr, loss, etime)
+            if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
+                logger.info('%s: [%d, %5d] loss: %.3f '
+                            '[%.3f + %.3f + %.3f + %.3f + %.3f] '
+                            '[mem: %.2e] '
+                            '(%.1f ms)'
+                            % ('Train' if train else 'Val', epoch + 1, itr,
+                                loss_train_m.avg if train else loss_val_m,
+                                org_loss_train_m.avg if train else org_loss_val_m.avg,
+                                cls_loss_train_m.avg if train else cls_loss_val_m.avg,
+                                reg_loss_train_m.avg if train else reg_loss_val_m.avg,
+                                pts_loss_train_m.avg if train else pts_loss_val_m.avg,
+                                alg_loss_train_m.avg if train else alg_loss_val_m.avg,
+                                torch.cuda.max_memory_allocated() / 1024.**2,
+                                time_meter.avg))
 
-            def train_step():
+        def log_wandb(epoch, train):
+            run.log({
+                'epoch': epoch + 1,
+                f'loss-{"train" if train else "val"}/total': loss_train_m.avg if train else loss_val_m,
+                f'loss-{"train" if train else "val"}/origin': org_loss_train_m.avg if train else org_loss_val_m.avg,
+                f'loss-{"train" if train else "val"}/classification': cls_loss_train_m.avg if train else cls_loss_val_m.avg,
+                f'loss-{"train" if train else "val"}/regression': reg_loss_train_m.avg if train else reg_loss_val_m.avg,
+                f'loss-{"train" if train else "val"}/points': pts_loss_train_m.avg if train else pts_loss_val_m.avg,
+                f'loss-{"train" if train else "val"}/align': alg_loss_train_m.avg if train else alg_loss_val_m.avg,
+                'gpu-mem': torch.cuda.max_memory_allocated() / 1024.**2
+            })
+
+        def step(imgs, grids, gt_org, gt_cls, gt_reg):
+            # Update learning rate
+            if decoder.training:
                 scheduler.step()
                 wd_scheduler.step()
 
-                def forward():
-                    # Charts -> Embeddings
-                    h = encoder(imgs)
-                    # TODO
-                    # Embeddings -> Predictions
-                    p_org, p_cls, p_reg = decoder(h)
-                    return p_org, p_cls, p_reg
+            def forward():
+                # Charts -> Embeddings
+                h = encoder(imgs, grids)
+                # Embeddings -> Predictions
+                p_org, p_cls, p_reg = decoder(h, grids)
+                return p_org, p_cls, p_reg
 
-                def loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg):
-                    # Coordinate system origin loss
-                    l_org = F.smooth_l1_loss(p_org, gt_org)
+            def loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg):
+                # Coordinate system origin loss
+                l_org = F.smooth_l1_loss(p_org, gt_org)
 
-                    # Weighted classification loss
-                    l_cls = F.cross_entropy(p_cls, gt_cls, weight=cls_weights, reduction='mean')
+                # Weighted classification loss
+                l_cls = F.cross_entropy(p_cls, gt_cls, weight=cls_weights, reduction='mean')
 
-                    # Regression loss only on non-background samples
-                    gt_reg_masked = torch.masked_select(gt_reg.permute(1,0,2,3), gt_cls.gt(0))
-                    p_reg_masked = torch.masked_select(p_reg.permute(1,0,2,3), gt_cls.gt(0))
-                    l_reg = F.mse_loss(p_reg_masked, gt_reg_masked)
+                # Regression loss only on non-background samples
+                gt_reg_masked = torch.masked_select(gt_reg.permute(1,0,2,3), gt_cls.gt(0))
+                p_reg_masked = torch.masked_select(p_reg.permute(1,0,2,3), gt_cls.gt(0))
+                l_reg = F.mse_loss(p_reg_masked, gt_reg_masked)
 
-                    # TODO
-                    gt_bars, gt_ticks = pts_map_to_lists(gt_cls, gt_reg)
-                    p_bars, p_ticks = get_pred_bars_ticks(p_cls, p_reg, pnt_thresh, cls_thresh)
-                    p_bars, p_ticks = nms(p_bars, p_ticks, eval_thresh)
+                # TODO
+                gt_bars, gt_ticks = pts_map_to_lists(gt_cls, gt_reg)
+                p_bars, p_ticks = get_pred_bars_ticks(p_cls, p_reg, pnt_thresh, cls_thresh)
+                p_bars, p_ticks = nms(p_bars, p_ticks, eval_thresh)
 
-                    # TODO
-                    # Per image in batch
-                    l_pts = l_align = 0.
-                    for bim in range(len(p_bars)):
-                        gbars, gticks = gt_bars[bim], gt_ticks[bim]
-                        pbars, pticks = p_bars[bim], p_ticks[bim]
-                        # Within class point loss
-                        l_pts += evaluate_pts_err(gbars, gticks, pbars, pticks, eval_thresh)
-                        # Chart specific loss: Aligns tick x coordinates
-                        l_align += sum([abs(t[0] - p_org[bim, 0]) for t in pticks])
+                # TODO
+                # Per image in batch
+                l_pts = l_align = 0.
+                for bim in range(len(p_bars)):
+                    gbars, gticks = gt_bars[bim], gt_ticks[bim]
+                    pbars, pticks = p_bars[bim], p_ticks[bim]
+                    # Within class point loss
+                    l_pts += evaluate_pts_err(gbars, gticks, pbars, pticks, eval_thresh)
+                    # Chart specific loss: Aligns tick x coordinates
+                    l_align += sum([abs(t[0] - p_org[bim, 0]) for t in pticks])
 
-                    # Weight losses according to scaling factors
-                    loss = l_org + l_cls + l_reg + l_pts / 10. + l_align / 1000.
-                    loss = AllReduce.apply(loss)
+                # Weight losses according to scaling factors
+                loss = l_org + l_cls + l_reg + l_pts / 10. + l_align / 1000.
+                loss = AllReduce.apply(loss)
 
-                    return loss, l_org, l_cls, l_reg, l_pts / 10., l_align / 1000.
+                return loss, (float(loss), l_org.item(), l_cls.item(), l_reg.item(), l_pts / 10., l_align / 1000.)
 
-                # Forward
-                with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
-                    p_org, p_cls, p_reg = forward()
-                    loss, l_org, l_cls, l_reg, l_pts, l_align = loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg)
+            # Forward
+            with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
+                p_org, p_cls, p_reg = forward()
+                loss, all_losses = loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg)
 
-                # Backward & step
+            # Backward & step
+            if decoder.training:
                 if use_bfloat16:
                     scaler.scale(loss).backward()
                     scaler.step(optimizer)
@@ -377,58 +404,66 @@ def main(args, resume_preempt=False):
                     optimizer.step()
                 optimizer.zero_grad()
 
-                return (float(loss), l_org.item(), l_cls.item(), l_reg.item(), l_pts, l_align)
+            return all_losses
 
-            (loss, l_org, l_cls, l_reg, l_pts, l_alg), etime = gpu_timer(train_step)
+        def update_meters(losses, train):
+            loss, l_org, l_cls, l_reg, l_pts, l_alg = losses
+            (loss_train_m if train else loss_val_m).update(loss)
+            (org_loss_train_m if train else org_loss_val_m).update(l_org)
+            (cls_loss_train_m if train else cls_loss_val_m).update(l_cls)
+            (reg_loss_train_m if train else reg_loss_val_m).update(l_reg)
+            (pts_loss_train_m if train else pts_loss_val_m).update(l_pts)
+            (alg_loss_train_m if train else alg_loss_val_m).update(l_alg)
+            return loss
 
-            loss_meter.update(loss)
-            org_loss_meter.update(l_org)
-            cls_loss_meter.update(l_cls)
-            reg_loss_meter.update(l_reg)
-            pts_loss_meter.update(l_pts)
-            alg_loss_meter.update(l_alg)
+        # Train loop
+        decoder.train()
+        for itr, (data, targets) in enumerate(train_loader):
+
+            imgs, grids, gt_org, gt_cls, gt_reg = load_charts(data, targets)
+
+            losses, etime = gpu_timer(
+                step,
+                imgs=imgs,
+                grids=grids,
+                gt_org=gt_org,
+                gt_cls=gt_cls,
+                gt_reg=gt_reg
+            )
+
+            loss = update_meters(losses, True)
             time_meter.update(etime)
 
-            # Log stats
-            def log_stats():
-                csv_logger.log(epoch + 1, itr, loss, etime)
-                if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
-                    logger.info('[%d, %5d] loss: %.3f '
-                                '[%.3f + %.3f + %.3f + %.3f + %.3f] '
-                                '[mem: %.2e] '
-                                '(%.1f ms)'
-                                % (epoch + 1, itr, loss_meter.avg,
-                                   org_loss_meter.avg,
-                                   cls_loss_meter.avg,
-                                   reg_loss_meter.avg,
-                                   pts_loss_meter.avg,
-                                   alg_loss_meter.avg,
-                                   torch.cuda.max_memory_allocated() / 1024.**2,
-                                   time_meter.avg))
-
-            log_stats()
-
-            def log_wandb():
-                run.log({
-                    'epoch': epoch + 1,
-                    'train-loss': loss_meter.avg,
-                    'loss/origin': org_loss_meter.avg,
-                    'loss/classification': cls_loss_meter.avg,
-                    'loss/regression': reg_loss_meter.avg,
-                    'loss/points': pts_loss_meter.avg,
-                    'loss/align': alg_loss_meter.avg,
-                    'gpu-mem': torch.cuda.max_memory_allocated() / 1024.**2
-                })
-
-            log_wandb()
+            log_stats(epoch, itr, loss, etime, True)
+            log_wandb(epoch, True)
 
             assert not np.isnan(loss), 'loss is nan'
 
-        # TODO Validation loop
+        # TODO check
+        # Validation loop
+        decoder.eval()
+        for itr, (data, targets) in enumerate(val_loader):
+
+            imgs, grids, gt_org, gt_cls, gt_reg = load_charts(data, targets)
+
+            losses, etime = gpu_timer(
+                step,
+                imgs=imgs,
+                grids=grids,
+                gt_org=gt_org,
+                gt_cls=gt_cls,
+                gt_reg=gt_reg
+            )
+
+            loss = update_meters(losses, False)
+            time_meter.update(etime)
+
+            log_stats(epoch, itr, loss, etime, False)
+            log_wandb(epoch, False)
 
         # TODO only save if lower validation loss?
         # -- Save Checkpoint after every epoch
-        logger.info('avg. loss %.3f' % loss_meter.avg)
+        logger.info('avg. loss %.3f' % loss_train_m.avg)
         save_checkpoint(epoch+1)
 
     run.finish()

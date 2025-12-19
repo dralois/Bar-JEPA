@@ -42,11 +42,13 @@ class ClassicDecoder(nn.Module):
         nn.init.normal_(self.final_layer.weight, std=0.001, mean=0)
         nn.init.constant_(self.final_layer.bias, 0)
 
-    def forward(self, x):
+    # TODO
+    def forward(self, x, grids):
         """
         Forward pass of the decoder.
 
         :param x: input feature maps from the backbone, shape: [B, C_in, H, W]
+        :param grids: list of grid shapes: B x [H, W]
         :return: estimated heatmaps for each keypoint, shape: [B, C_out, H*4, W*4]
         """
         x = self.deconv_layers(x)
@@ -76,12 +78,14 @@ class SimpleDecoder(nn.Module):
         nn.init.normal_(self.final_layer.weight, std=0.001, mean=0)
         nn.init.constant_(self.final_layer.bias, 0)
 
-    def forward(self, x):
+    # TODO
+    def forward(self, x, grids):
         """
         Forward pass of the decoder.
 
-        :param x: input feature maps from the backbone, shape: [B, C_in, H, W]
-        :return: estimated heatmaps for each keypoint, shape: [B, C_out, H*4, W*4]
+        :param x: input feature maps from the backbone, shape: [B, N, C_in]
+        :param grids: list of grid shapes: B x [H, W]
+        :return: estimated heatmaps for each keypoint, shape: [B, N*4, C_out]
         """
         # Upsample feature maps by 4 times with bilinear interpolation
         x = F.interpolate(F.relu_(x), scale_factor=4, mode='bilinear', align_corners=False)
@@ -140,11 +144,13 @@ class KeypointDetector(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, x):
+    # TODO
+    def forward(self, x, grids):
         """
         Forward pass of the keypoint detector.
 
-        :param x: input feature maps from I-JEPA, shape: [B, N, H, W]
+        :param x: input feature maps, shape: [B, N, D]
+        :param grids: list of grid shapes: B x [H, W]
         :return: tuple containing:
             - predicted class probabilities, shape: [B, ncls, H*4, W*4]
             - predicted (dx, dy) offsets, shape: [B, 2, H*4, W*4]
