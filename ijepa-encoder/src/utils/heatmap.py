@@ -7,24 +7,24 @@ def cls_pts_to_map(cls_pts_lists, mapsize):
     to maps of point classes and regression values.
 
     :param cls_pts_lists: List of lists containing normalized points for each class.
-    :param mapsize: (w, h) size of the output maps.
+    :param mapsize: (h, w) size of the output maps.
     :return: Tuple containing map with class IDs and x and y regression values (offsets).
     """
 
     # Make maps of size [H, W], [2, H, W]
-    cls_map = torch.zeros((mapsize[1], mapsize[0]), dtype=torch.int32)
-    reg_map = torch.zeros((2, mapsize[1], mapsize[0]))
+    cls_map = torch.zeros((mapsize[0], mapsize[1]), dtype=torch.int32)
+    reg_map = torch.zeros((2, mapsize[0], mapsize[1]))
 
     # [bars, ticks] -> Class 1, 2
     for cls_id, cls_list in enumerate(cls_pts_lists):
         for point in cls_list:
             # Compute map coordinates and regression values
-            pos = torch.floor(point * mapsize).type(torch.int32)
-            reg = point * mapsize - pos - 0.5
+            pos = torch.floor(point.flip(-1) * mapsize).type(torch.int32)
+            reg = point.flip(-1) * mapsize - pos - 0.5
 
-            # Maps are transposed
-            cls_map[pos[1], pos[0]] = cls_id + 1
-            reg_map[:, pos[1], pos[0]] = reg
+            # Store in maps
+            cls_map[pos[0], pos[1]] = cls_id + 1
+            reg_map[:, pos[0], pos[1]] = reg
 
     return cls_map, reg_map
 

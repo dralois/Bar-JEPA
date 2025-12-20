@@ -259,7 +259,6 @@ def main(args, resume_preempt=False):
     # -- load training checkpoint
     if load_model:
         encoder, predictor, target_encoder, optimizer, scaler, start_epoch = load_ijepa_checkpoint(
-            device=device,
             world_size=world_size,
             do_finetune=do_finetune,
             r_path=load_path,

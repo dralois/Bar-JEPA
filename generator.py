@@ -240,13 +240,17 @@ def get_random_plot(filename):
     # set the ticks and tick labels
     set_hticks(x + (bar_width / 2) * bar_per_loc)
     hticklabels = set_hticklabels(ticks_label, fontproperties=ticks_label_font)
-    hticklines = get_hticklines()
+    hticklines = [line for line in get_hticklines() if not line.get_ydata()[0]]
     vticklabels = get_vticklabels()
-    vticklines = get_vticklines()
+    vticklines = [line for line in get_vticklines() if not line.get_xdata()[0]]
     for label in vticklabels:
         label.set_fontproperties(ticks_label_font)
-    axis_ticks = {"value": zip(vticklabels, vticklines),
-                  "category": zip(hticklabels, hticklines)}
+    if bar_direction == "horizontal":
+        axis_ticks = {  "value":    zip(hticklabels, hticklines),
+                        "category": zip(vticklabels, vticklines)}
+    else:
+        axis_ticks = {  "value":    zip(vticklabels, vticklines),
+                        "category": zip(hticklabels, hticklines)}
 
     # set legend, possible positions include: top, bottom, upper right and center right
     ax_bbox = ax.get_position()
@@ -340,7 +344,9 @@ def build_tick_annotations(fig_height, axes, axis_ticks):
         text = lbl.get_text()
         lbl_cor = compute_bbox(fig_height, lbl.get_tightbbox())
         ln_cor = compute_bbox(fig_height, ln.get_tightbbox())
-        ti["value"]["entries"].append({"bbox": lbl_cor, "text": text, "tick": ln_cor})
+        # Only store visible ticks
+        if lbl_cor[1] > 0 and lbl_cor[3] > 0 and ln_cor[1] > 0 and ln_cor[3] > 0:
+            ti["value"]["entries"].append({"bbox": lbl_cor, "text": text, "tick": ln_cor})
 
     ti["category"]["bbox"] = compute_bbox(fig_height, axes.xaxis.get_tightbbox())
     for lbl, ln in axis_ticks["category"]:

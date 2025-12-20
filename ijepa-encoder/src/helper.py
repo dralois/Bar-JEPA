@@ -22,6 +22,7 @@ from src.utils.tensors import trunc_normal_
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
 
+
 def convert_ddp(checkpoint_dict, do_convert):
     if not do_convert:
         return checkpoint_dict
@@ -34,7 +35,6 @@ def convert_ddp(checkpoint_dict, do_convert):
 
 
 def load_ijepa_checkpoint(
-    device,
     world_size,
     do_finetune,
     r_path,
@@ -89,7 +89,6 @@ def load_ijepa_checkpoint(
 
 
 def load_decoder_checkpoint(
-    device,
     world_size,
     do_finetune,
     r_path,
