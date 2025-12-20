@@ -1,10 +1,13 @@
 # Adapted from:
 # https://github.com/csuvis/BarchartReverseEngineering/blob/master/generate_random_bar_chart.py
 
+import multiprocessing as mp
+
 import os
 import matplotlib
 
 matplotlib.use("Agg")
+
 import re
 import json
 import shutil
@@ -12,6 +15,7 @@ import random
 import string
 import itertools
 import argparse
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -517,12 +521,44 @@ def bbox_one_line(json_str):
     return bbox_pattern.sub(lambda m: f'"bbox": [{",".join([x.strip() for x in m.group(1).split(",")])}]', json_str)
 
 
-def generate_plots(output_dir, n, clear, val, train_or_test):
+def generate_plots_chunk(args):
+    i, store_dir, train_or_test, val, schema = args
+    try:
+        img_id = "{}_{}.{}".format(train_or_test, i, "png")
+        img_path = os.path.join(store_dir, "images", img_id)
+        plot_objs = get_random_plot(img_path)
+
+        annotation = annotate(plot_objs)
+
+        # Validate the annotation against the schema if validation is enabled
+        if val:
+            try:
+                validate(instance=annotation, schema=schema)
+            except ValidationError as e:
+                raise e from e
+
+        # Save JSON
+        json_id = "{}_{}.{}".format(train_or_test, i, "json")
+        json_path = os.path.join(store_dir, "annotations", json_id)
+        with open(json_path, 'w') as f:
+            json_str = bbox_one_line(json.dumps(annotation, indent=2))
+            f.write(json_str)
+
+        # close the figure
+        plt.close(plot_objs[0])
+    except Exception as e:
+        with open(os.path.join(store_dir, "error_log.txt"), "a") as f_error:
+            f_error.write("{} error: {}".format(img_path, e))
+            f_error.write("\n")
+
+
+def generate_plots(output_dir, n, num_processes, clear, val, train_or_test):
     """
     Generates annotated bar charts
 
     :param output_dir: Where to put the charts
     :param n: Number of charts to generate
+    :param num_processes: Number of processes to use for generation
     :param clear: Flag whether to clear the output directory
     :param val: Flag whether to validate the annotations
     :param train_or_test: Whether to generate train or test data
@@ -543,46 +579,26 @@ def generate_plots(output_dir, n, clear, val, train_or_test):
         with open('format.json', 'r') as f:
             schema = json.load(f)
 
-    for i in tqdm(range(n)):
-        try:
-            img_id = "{}_{}.{}".format(train_or_test, i, "png")
-            img_path = os.path.join(store_dir, "images", img_id)
-            plot_objs = get_random_plot(img_path)
+    # Create a list of arguments for each task
+    tasks = [(i, store_dir, train_or_test, val, schema) for i in range(n)]
 
-            annotation = annotate(plot_objs)
+    # Use multiprocessing.Pool to generate plots in parallel
+    with mp.Pool(processes=num_processes) as pool, tqdm(total=n) as pbar:
+        for _ in pool.imap_unordered(generate_plots_chunk, tasks):
+            pbar.update()
 
-            # Validate the annotation against the schema if validation is enabled
-            if val:
-                try:
-                    validate(instance=annotation, schema=schema)
-                except ValidationError as e:
-                    raise e from e
-
-            # Save JSON
-            json_id = "{}_{}.{}".format(train_or_test, i, "json")
-            json_path = os.path.join(store_dir, "annotations", json_id)
-            with open(json_path, 'w') as f:
-                json_str = bbox_one_line(json.dumps(annotation, indent=2))
-                f.write(json_str)
-
-            # close the figure
-            plt.close(plot_objs[0])
-        except Exception as e:
-            with open(os.path.join(store_dir, "error_log.txt"), "a") as f_error:
-                f_error.write("{} error: {}".format(img_path, e))
-                f_error.write("\n")
-
-        print(train_or_test + " plot generation done!")
+    print(train_or_test + " plot generation done!")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="This python script generates random bar charts and their elements' bounding boxes")
-    parser.add_argument('--output_dir', type=str, default='output', help='Directory to save the images and JSON files.')
+    parser.add_argument('--output_dir', help='Directory to save the images and JSON files.', required=True, type=str)
     parser.add_argument("--train_total", help="Number of traning images", required=True, type=int)
     parser.add_argument("--test_total", help="Number of test images", required=True, type=int)
-    parser.add_argument('--clear_output', action='store_true', help='Clear the output directory before generation.')
-    parser.add_argument('--validate', action='store_true', help='Validate the generated JSON annotations against the schema.')
+    parser.add_argument("--num_processes", help="Number of processes to use", default=1, type=int)
+    parser.add_argument('--clear_output', help='Clear the output directory before generation.', action='store_true')
+    parser.add_argument('--validate', help='Validate the generated JSON annotations against the schema.', action='store_true')
 
     args = parser.parse_args()
 
@@ -590,6 +606,7 @@ if __name__ == "__main__":
     generate_plots(
         args.output_dir,
         args.train_total,
+        args.num_processes,
         args.clear_output,
         args.validate,
         "train"
@@ -599,6 +616,7 @@ if __name__ == "__main__":
     generate_plots(
         args.output_dir,
         args.test_total,
+        args.num_processes,
         args.clear_output,
         args.validate,
         "test"
