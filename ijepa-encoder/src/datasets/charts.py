@@ -26,6 +26,7 @@ logger = getLogger()
 def make_charts(
     transform,
     batch_size,
+    patch_size,
     collator=None,
     pin_mem=True,
     num_workers=8,
@@ -38,6 +39,7 @@ def make_charts(
     drop_last=True
 ):
     dataset = Charts(
+        patch_size=patch_size,
         root=root_path,
         image_folder=image_folder,
         annotation_folder=annotation_folder,
@@ -66,6 +68,7 @@ class Charts(torchvision.datasets.DatasetFolder):
 
     def __init__(
         self,
+        patch_size,
         root='data',
         image_folder='images',
         annotation_folder='annotations',
@@ -93,7 +96,10 @@ class Charts(torchvision.datasets.DatasetFolder):
         logger.info(f'Loading data from {img_path} / {ann_path}')
 
         try:
+            self.patch_size = patch_size
+            self.transform = transform
             self.data_paths = []
+
             for fname in os.listdir(img_path):
                 if fname.lower().endswith(('.png', '.jpg', '.jpeg')):
                     base_name = os.path.splitext(fname)[0]
@@ -108,8 +114,8 @@ class Charts(torchvision.datasets.DatasetFolder):
                     else:
                         self.data_paths.append((img_full_path, ann_full_path))
 
-            self.transform = transform
             logger.info(f'Loaded {len(self.data_paths)} {"training" if train else "test"} images')
+
         except FileNotFoundError:
             raise ValueError(f'Number of images and annotations do not match')
 
@@ -148,7 +154,7 @@ class Charts(torchvision.datasets.DatasetFolder):
                 bars.append(torch.tensor([float(v) for v in bar['bbox'][:2]]) / size)
 
         # Map size depends on image size
-        mapsize = torch.tensor(img.shape[1:3]) // 4
+        mapsize = (torch.tensor(img.shape[1:3]) // self.patch_size) * 4
         # Generate class and regression maps
         gt_cls, gt_reg = cls_pts_to_map([bars, ticks], mapsize)
 

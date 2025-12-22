@@ -27,7 +27,7 @@ from src.utils.distributed import (
     AllReduce)
 
 from src.utils.heatmap import (
-    pts_map_to_lists,
+    gt_maps_to_lists,
     get_pred_bars_ticks,
     nms,
     evaluate_pts,
@@ -38,7 +38,6 @@ from src.utils.heatmap import (
 from src.utils.logging import (
     CSVLogger,
     gpu_timer,
-    grad_logger,
     AverageMeter)
 
 from src.datasets.charts import make_charts
@@ -189,6 +188,7 @@ def main(args, resume_preempt=False):
     # -- init data-loaders/samplers
     collator = DefaultCollator()
     _, train_loader, train_sampler = make_charts(
+            patch_size=patch_size,
             transform=transform,
             batch_size=batch_size,
             collator=collator,
@@ -202,6 +202,7 @@ def main(args, resume_preempt=False):
             training=True,
             drop_last=True)
     _, val_loader, val_sampler = make_charts(
+            patch_size=patch_size,
             transform=transform,
             batch_size=batch_size,
             collator=collator,
@@ -231,7 +232,7 @@ def main(args, resume_preempt=False):
         ipe_scale=ipe_scale)
 
     if world_size != 1:
-        decoder = DistributedDataParallel(decoder, static_graph=True)
+        decoder = DistributedDataParallel(decoder)
         encoder = DistributedDataParallel(encoder)
 
     # Encoder is frozen for decoder training
@@ -354,32 +355,34 @@ def main(args, resume_preempt=False):
                 return p_org, p_cls, p_reg
 
             def loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg):
-                # Coordinate system origin loss
-                l_org = F.smooth_l1_loss(p_org, gt_org)
+                l_org = l_cls = l_reg = l_pts = l_align = 0.
 
-                # Weighted classification loss
-                l_cls = F.cross_entropy(p_cls, gt_cls, weight=cls_weights, reduction='mean')
+                # For each chart in batch individually
+                for i in range(len(p_org)):
+                    # Coordinate system origin loss
+                    l_org += F.smooth_l1_loss(p_org[i], gt_org[i])
 
-                # Regression loss only on non-background samples
-                gt_reg_masked = torch.masked_select(gt_reg.permute(1,0,2,3), gt_cls.gt(0))
-                p_reg_masked = torch.masked_select(p_reg.permute(1,0,2,3), gt_cls.gt(0))
-                l_reg = F.mse_loss(p_reg_masked, gt_reg_masked)
+                    # Weighted classification loss
+                    l_cls = F.cross_entropy(p_cls[i].unsqueeze(0), gt_cls[i].unsqueeze(0), weight=cls_weights, reduction='mean')
 
-                # TODO
-                gt_bars, gt_ticks = pts_map_to_lists(gt_cls, gt_reg)
-                p_bars, p_ticks = get_pred_bars_ticks(p_cls, p_reg, pnt_thresh, cls_thresh)
-                p_bars, p_ticks = nms(p_bars, p_ticks, eval_thresh)
+                    # Regression loss only on non-background samples
+                    gt_reg_masked = torch.masked_select(gt_reg[i], gt_cls[i].gt(0))
+                    p_reg_masked = torch.masked_select(p_reg[i], gt_cls[i].gt(0))
+                    l_reg = F.mse_loss(p_reg_masked, gt_reg_masked)
 
-                # TODO
-                # Per image in batch
-                l_pts = l_align = 0.
-                for bim in range(len(p_bars)):
-                    gbars, gticks = gt_bars[bim], gt_ticks[bim]
-                    pbars, pticks = p_bars[bim], p_ticks[bim]
-                    # Within class point loss
-                    l_pts += evaluate_pts_err(gbars, gticks, pbars, pticks, eval_thresh)
-                    # Chart specific loss: Aligns tick x coordinates
-                    l_align += sum([abs(t[0] - p_org[bim, 0]) for t in pticks])
+                    # TODO
+                    gt_bars, gt_ticks = gt_maps_to_lists(gt_cls[i], gt_reg[i])
+                    p_bars, p_ticks = get_pred_bars_ticks(p_cls, p_reg, pnt_thresh, cls_thresh)
+                    p_bars, p_ticks = nms(p_bars, p_ticks, eval_thresh)
+
+                    # TODO
+                    for bim in range(len(p_bars)):
+                        gbars, gticks = gt_bars[bim], gt_ticks[bim]
+                        pbars, pticks = p_bars[bim], p_ticks[bim]
+                        # Within class point loss
+                        l_pts += evaluate_pts_err(gbars, gticks, pbars, pticks, eval_thresh)
+                        # Chart specific loss: Aligns tick x coordinates
+                        l_align += sum([abs(t[0] - p_org[bim, 0]) for t in pticks])
 
                 # Weight losses according to scaling factors
                 loss = l_org + l_cls + l_reg + l_pts / 10. + l_align / 1000.

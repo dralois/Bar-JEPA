@@ -1,18 +1,22 @@
 import torch
 import numpy as np
 
+
 def cls_pts_to_map(cls_pts_lists, mapsize):
     """
     Converts a list of points of different classes
     to maps of point classes and regression values.
 
-    :param cls_pts_lists: List of lists containing normalized points for each class.
-    :param mapsize: (h, w) size of the output maps.
-    :return: Tuple containing map with class IDs and x and y regression values (offsets).
+    :param cls_pts_lists: list of lists containing normalized points for each class.
+    :param mapsize: size of the output maps, (H, W).
+    :return: tuple containing:
+
+        - map with class IDs, shape [H, W]
+        - map with x and y regression values (offsets), shape [2, H, W]
     """
 
     # Make maps of size [H, W], [2, H, W]
-    cls_map = torch.zeros((mapsize[0], mapsize[1]), dtype=torch.int32)
+    cls_map = torch.zeros((mapsize[0], mapsize[1]), dtype=torch.long)
     reg_map = torch.zeros((2, mapsize[0], mapsize[1]))
 
     # [bars, ticks] -> Class 1, 2
@@ -20,7 +24,7 @@ def cls_pts_to_map(cls_pts_lists, mapsize):
         for point in cls_list:
             # Compute map coordinates and regression values
             pos = torch.floor(point.flip(-1) * mapsize).type(torch.int32)
-            reg = point.flip(-1) * mapsize - pos - 0.5
+            reg = (point.flip(-1) * mapsize) - pos - 0.5
 
             # Store in maps
             cls_map[pos[0], pos[1]] = cls_id + 1
@@ -28,36 +32,43 @@ def cls_pts_to_map(cls_pts_lists, mapsize):
 
     return cls_map, reg_map
 
-# TODO
-def pts_map_to_lists(pts_cls_map, pts_reg_map):
-    bars = [[] for im in range(pts_cls_map.shape[0])]
-    ticks = [[] for im in range(pts_cls_map.shape[0])]
 
-    classes = pts_cls_map
-    pts_im, pts_x, pts_y = torch.nonzero(classes, as_tuple=True)
+def gt_maps_to_lists(gt_cls, gt_reg):
+    """
+    Converts ground truth class and regression maps to lists of bar and tick positions.
 
-    for im, x, y in zip(pts_im, pts_x, pts_y):
-        cls = classes[im, x, y]
-        pos_x = (x.float() * 2 + 1) / (classes.shape[2] * 2)
-        pos_y = (y.float() * 2 + 1) / (classes.shape[3] * 2)
+    :param gt_cls: ground truth class map, shape [H, W].
+    :param gt_reg: ground truth regression map, shape [2, H, W].
+    :return: Tuple containing:
 
-        reg = pts_reg_map[im, :, x, y]
-        pos_x += reg[0] / classes.shape[2]
-        pos_y += reg[1] / classes.shape[3]
+        - list of bars, x / y coordinates in image space
+        - list of ticks, x / y coordinates in image space
+    """
+    bars = []
+    ticks = []
 
-        match cls:
+    size = torch.tensor(gt_cls.shape, device=gt_cls.device)
+    for point in torch.nonzero(gt_cls):
+        # Pixel midpoint in image space
+        pos = (point * 2 + 1) / (size * 2)
+
+        # Offset pixel midpoint by regression value
+        pos += gt_reg[:, point[0], point[1]] / size
+
+        match gt_cls[point[0], point[1]]:
             case 0: # Background
                 pass
             case 1: # Bar
-                bars[im].append((pos_x, pos_y))
+                bars.append(pos)
             case 2: # Tick
-                ticks[im].append((pos_x, pos_y))
+                ticks.append(pos)
             case _:
-                raise ValueError(f"Unknown class {cls}")
+                raise ValueError(f"Unknown class {gt_cls[point[0], point[1]]}")
 
     return bars, ticks
 
 # TODO
+# Both maps should be [H, W], [2, H, W] respectively
 def get_pred_bars_ticks(pred_cls_map, pred_reg_map, pt_thresh, conf_thresh):
     bars = [[] for im in range(pred_cls_map.shape[0])]
     ticks = [[] for im in range(pred_cls_map.shape[0])]

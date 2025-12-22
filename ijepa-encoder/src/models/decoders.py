@@ -163,6 +163,7 @@ class KeypointDetector(nn.Module):
         :param x: input feature maps, shape: [B, N, D]
         :param grids: list of grid shapes: B x [H, W]
         :return: tuple containing:
+
             - predicted origin coordinates, shape: B x [2]
             - predicted class probabilities, shape: B x [ncls, H*4, W*4]
             - predicted (dx, dy) offsets, shape: B x [2, H*4, W*4]
