@@ -140,7 +140,7 @@ class Charts(torchvision.datasets.DatasetFolder):
 
         # Coordinate system origin is normalized
         size = torch.tensor([float(v) for v in ann['chart_metadata']['size']['bbox'][2:]])
-        gt_org = torch.tensor([float(v) for v in ann['chart_metadata']['origin']['bbox'][:2]]) / size
+        gt_org = (torch.tensor([float(v) for v in ann['chart_metadata']['origin']['bbox'][:2]]) / size).flip(-1)
 
         ticks = []
         # Ticks are normalized x,y coordinates of the tick location

@@ -27,11 +27,10 @@ from src.utils.distributed import (
     AllReduce)
 
 from src.utils.heatmap import (
-    gt_maps_to_lists,
-    get_pred_bars_ticks,
+    gt_maps_to_cls_lists,
+    p_maps_to_cls_lists,
     nms,
-    evaluate_pts,
-    evaluate_pts_err,
+    evaluate_gt_p_match,
     f1
 )
 
@@ -356,6 +355,7 @@ def main(args, resume_preempt=False):
 
             def loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg):
                 l_org = l_cls = l_reg = l_pts = l_align = 0.
+                sizes = torch.tensor([c.shape for c in gt_cls], device=device)
 
                 # For each chart in batch individually
                 for i in range(len(p_org)):
@@ -363,26 +363,27 @@ def main(args, resume_preempt=False):
                     l_org += F.smooth_l1_loss(p_org[i], gt_org[i])
 
                     # Weighted classification loss
-                    l_cls = F.cross_entropy(p_cls[i].unsqueeze(0), gt_cls[i].unsqueeze(0), weight=cls_weights, reduction='mean')
+                    l_cls += F.cross_entropy(p_cls[i].unsqueeze(0), gt_cls[i].unsqueeze(0), weight=cls_weights, reduction='mean')
 
                     # Regression loss only on non-background samples
                     gt_reg_masked = torch.masked_select(gt_reg[i], gt_cls[i].gt(0))
                     p_reg_masked = torch.masked_select(p_reg[i], gt_cls[i].gt(0))
-                    l_reg = F.mse_loss(p_reg_masked, gt_reg_masked)
+                    l_reg += F.mse_loss(p_reg_masked, gt_reg_masked)
 
-                    # TODO
-                    gt_bars, gt_ticks = gt_maps_to_lists(gt_cls[i], gt_reg[i])
-                    p_bars, p_ticks = get_pred_bars_ticks(p_cls, p_reg, pnt_thresh, cls_thresh)
-                    p_bars, p_ticks = nms(p_bars, p_ticks, eval_thresh)
+                    # Radius for nms and l_pts is based on max(H, W)
+                    radius_thresh = eval_thresh / sizes[i].max()
+                    # Convert maps to lists of bars & ticks
+                    gt_bars, gt_ticks = gt_maps_to_cls_lists(gt_cls[i], gt_reg[i], sizes[i])
+                    p_bars, p_ticks = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
+                    # Filter predictions using nms
+                    p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
 
-                    # TODO
-                    for bim in range(len(p_bars)):
-                        gbars, gticks = gt_bars[bim], gt_ticks[bim]
-                        pbars, pticks = p_bars[bim], p_ticks[bim]
-                        # Within class point loss
-                        l_pts += evaluate_pts_err(gbars, gticks, pbars, pticks, eval_thresh)
-                        # Chart specific loss: Aligns tick x coordinates
-                        l_align += sum([abs(t[0] - p_org[bim, 0]) for t in pticks])
+                    # Within class point loss
+                    l_pts += evaluate_gt_p_match(gt_bars, gt_ticks, p_bars, p_ticks, radius_thresh, True)
+
+                    # Chart specific loss: Aligns tick x coordinates
+                    if len(p_ticks) > 0:
+                        l_align += (torch.stack(p_ticks)[:,1] - p_org[i][1]).abs().sum()
 
                 # Weight losses according to scaling factors
                 loss = l_org + l_cls + l_reg + l_pts / 10. + l_align / 1000.

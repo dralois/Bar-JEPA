@@ -127,11 +127,15 @@ class KeypointDetector(nn.Module):
         else:
             raise ValueError(f'Unknown decoder type {decoder_type}')
 
-        self.fc_cls = nn.Conv2d(num_keypoints, num_classes, 1, 1, 0) # Predicts class probabilities
+        self.fc_cls = nn.Sequential(
+            nn.Conv2d(num_keypoints, num_classes, 1, 1, 0)
+        ) # Predicts class probabilities
+
         self.fc_reg = nn.Sequential(
             nn.Conv2d(num_keypoints, 2, 1, 1, 0),
             nn.Tanh()
         ) # Predicts (dx, dy) offsets
+
         self.fc_org = nn.Sequential(
             nn.Flatten(start_dim=0),
             nn.Linear(max_patches * in_channels, 2),
@@ -164,9 +168,9 @@ class KeypointDetector(nn.Module):
         :param grids: list of grid shapes: B x [H, W]
         :return: tuple containing:
 
-            - predicted origin coordinates, shape: B x [2]
+            - predicted (y, x) origin coordinates, shape: B x [2]
             - predicted class probabilities, shape: B x [ncls, H*4, W*4]
-            - predicted (dx, dy) offsets, shape: B x [2, H*4, W*4]
+            - predicted (dy, dx) offsets, shape: B x [2, H*4, W*4]
         """
         org_preds = []
         cls_preds = []
