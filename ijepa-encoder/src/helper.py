@@ -188,6 +188,7 @@ def init_decoder_model(
         max_patches=max_patches,
         patch_size=patch_size)
     decoder = KeypointDetector(
+        max_patches=max_patches,
         in_channels=encoder.num_features,
         num_keypoints=max_keypoints,
         num_classes=3,

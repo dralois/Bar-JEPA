@@ -6,6 +6,7 @@ from src.utils.tensors import trunc_normal_
 
 
 class ClassicDecoder(nn.Module):
+
     def __init__(self, in_channels=1280, out_channels=64):
         """
         Classic decoder for keypoint detection.
@@ -42,21 +43,21 @@ class ClassicDecoder(nn.Module):
         nn.init.normal_(self.final_layer.weight, std=0.001, mean=0)
         nn.init.constant_(self.final_layer.bias, 0)
 
-    # TODO
-    def forward(self, x, grids):
+    def forward(self, x):
         """
         Forward pass of the decoder.
 
-        :param x: input feature maps from the backbone, shape: [B, C_in, H, W]
-        :param grids: list of grid shapes: B x [H, W]
-        :return: estimated heatmaps for each keypoint, shape: [B, C_out, H*4, W*4]
+        :param x: input feature map from the backbone, shape: [1, C_in, H, W]
+        :return: estimated heatmap for keypoint, shape: [C_out, H*4, W*4]
         """
+        # [1, C_in, H, W] -> [1, C_in, H*4, W*4]
         x = self.deconv_layers(x)
-        heatmaps = self.final_layer(x)
-        return heatmaps
+        # [1, C_in, H*4, W*4] -> [C_out, H*4, W*4]
+        return self.final_layer(x).squeeze(0)
 
 
 class SimpleDecoder(nn.Module):
+
     def __init__(self, in_channels=1280, out_channels=64):
         """
         Simple decoder for keypoint detection.
@@ -78,24 +79,24 @@ class SimpleDecoder(nn.Module):
         nn.init.normal_(self.final_layer.weight, std=0.001, mean=0)
         nn.init.constant_(self.final_layer.bias, 0)
 
-    # TODO
-    def forward(self, x, grids):
+    def forward(self, x):
         """
         Forward pass of the decoder.
 
-        :param x: input feature maps from the backbone, shape: [B, N, C_in]
-        :param grids: list of grid shapes: B x [H, W]
-        :return: estimated heatmaps for each keypoint, shape: [B, N*4, C_out]
+        :param x: input feature map from the backbone, shape: [1, C_in, H, W]
+        :return: estimated heatmap for keypoint, shape: [C_out, H*4, W*4]
         """
-        # Upsample feature maps by 4 times with bilinear interpolation
+        # [1, C_in, H, W] -> [1, C_in, H*4, W*4]
         x = F.interpolate(F.relu_(x), scale_factor=4, mode='bilinear', align_corners=False)
-        heatmaps = self.final_layer(x)
-        return heatmaps
+        # [1, C_in, H*4, W*4] -> [C_out, H*4, W*4]
+        return self.final_layer(x).squeeze(0)
 
 
 class KeypointDetector(nn.Module):
+
     def __init__(
         self,
+        max_patches,
         in_channels=1280,
         num_keypoints=64,
         num_classes=3,
@@ -105,17 +106,20 @@ class KeypointDetector(nn.Module):
         """
         Combined keypoint detector with classification and regression heads.
 
-        :param in_channels: number of input channels from the backbone
-        :param num_keypoints: max. number of keypoints
-        :param num_classes: number of keypoint classes (e.g., tick, bar, background)
-        :param decoder_type: type of decoder ('simple' or 'classic')
+        :param max_patches: max. number of patches (H*W).
+        :param in_channels: number of input channels from the backbone.
+        :param num_keypoints: max. number of keypoints.
+        :param num_classes: number of keypoint classes (e.g., tick, bar, background).
+        :param decoder_type: type of decoder ('simple' or 'classic').
         """
         super().__init__()
+        self.max_patches = max_patches
+        self.h_w = int(max_patches ** 0.5)
         self.in_channels = in_channels
         self.num_keypoints = num_keypoints
         self.decoder_type = decoder_type
 
-        # ViTPose-inspired Decoder
+        # ViTPose-inspired decoders
         if decoder_type == 'simple':
             self.decoder = SimpleDecoder(in_channels, num_keypoints)
         elif decoder_type == 'classic':
@@ -123,8 +127,16 @@ class KeypointDetector(nn.Module):
         else:
             raise ValueError(f'Unknown decoder type {decoder_type}')
 
-        self.fc_cls = nn.Conv2d(num_keypoints, num_classes, 1, 1, 0)  # Predicts class probabilities
-        self.fc_reg = nn.Conv2d(num_keypoints, 2, 1, 1, 0)  # Predicts (dx, dy) offsets
+        self.fc_cls = nn.Conv2d(num_keypoints, num_classes, 1, 1, 0) # Predicts class probabilities
+        self.fc_reg = nn.Sequential(
+            nn.Conv2d(num_keypoints, 2, 1, 1, 0),
+            nn.Tanh()
+        ) # Predicts (dx, dy) offsets
+        self.fc_org = nn.Sequential(
+            nn.Flatten(start_dim=0),
+            nn.Linear(max_patches * in_channels, 2),
+            nn.Sigmoid()
+        ) # Predicts coordinate origin directly
 
         self.drop_layer = nn.Dropout(p=0.5)
 
@@ -144,7 +156,6 @@ class KeypointDetector(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    # TODO
     def forward(self, x, grids):
         """
         Forward pass of the keypoint detector.
@@ -152,15 +163,33 @@ class KeypointDetector(nn.Module):
         :param x: input feature maps, shape: [B, N, D]
         :param grids: list of grid shapes: B x [H, W]
         :return: tuple containing:
-            - predicted class probabilities, shape: [B, ncls, H*4, W*4]
-            - predicted (dx, dy) offsets, shape: [B, 2, H*4, W*4]
+            - predicted origin coordinates, shape: B x [2]
+            - predicted class probabilities, shape: B x [ncls, H*4, W*4]
+            - predicted (dx, dy) offsets, shape: B x [2, H*4, W*4]
         """
-        # Get feature maps from the decoder [B, N, H, W]
-        x = self.decoder(x)
+        org_preds = []
+        cls_preds = []
+        reg_preds = []
+
         x = self.drop_layer(x)
 
-        # Predict class probabilities and offsets
-        cls_pred = self.fc_cls(x)
-        reg_pred = F.tanh(self.fc_reg(x))
+        # Process each element in the batch separately to handle variable grid sizes
+        for i in range(x.size(0)):
+            num_patches = grids[i][0] * grids[i][1]
 
-        return cls_pred, reg_pred
+            # [1, N, C_in] -> [1, C_in, H, W], considering only valid patches
+            valid_x = x[i, :num_patches]
+            valid_x = valid_x.permute(1, 0).view(1, -1, grids[i][0], grids[i][1])
+
+            # Origin prediction: [1, N, D] -> [N * D] -> [2]
+            org_preds.append(self.fc_org(x[i]))
+
+            # Get feature map from the decoder [C_out, H*4, W*4]
+            valid_x = self.decoder(valid_x)
+            valid_x = self.drop_layer(valid_x)
+
+            # Predict class probabilities and offsets
+            cls_preds.append(self.fc_cls(valid_x))
+            reg_preds.append(self.fc_reg(valid_x))
+
+        return org_preds, cls_preds, reg_preds

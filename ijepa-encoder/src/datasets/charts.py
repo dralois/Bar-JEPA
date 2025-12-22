@@ -100,9 +100,13 @@ class Charts(torchvision.datasets.DatasetFolder):
                     img_full_path = os.path.join(img_path, fname)
                     ann_full_path = os.path.join(ann_path, f"{base_name}.json")
 
-                    if not os.path.exists(ann_full_path):
+                    # If annotation path and image path are the same, then annotations are irrelevant
+                    if img_path == ann_path:
+                        self.data_paths.append((img_full_path, None))
+                    elif not os.path.exists(ann_full_path):
                         raise FileNotFoundError(f"Annotation file not found for image: {fname}")
-                    self.data_paths.append((img_full_path, ann_full_path))
+                    else:
+                        self.data_paths.append((img_full_path, ann_full_path))
 
             self.transform = transform
             logger.info(f'Loaded {len(self.data_paths)} {"training" if train else "test"} images')
@@ -120,6 +124,10 @@ class Charts(torchvision.datasets.DatasetFolder):
         img = Image.open(img_path).convert('RGB')
         if self.transform:
             img = self.transform(img)
+
+        # If no annotations, we are finetuning
+        if ann_path is None:
+            return img, 0
 
         # -- Annotations
         ann = json.load(open(ann_path))

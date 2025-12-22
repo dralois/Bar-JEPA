@@ -7,15 +7,15 @@ data:
   crop_size: 224
   num_workers: 2
   pin_mem: true
-  root_path: ./data_small/
-  image_folder: /images/
-  annotation_folder: /annotations/
+  root_path: ./data_small
+  image_folder: images
+  annotation_folder: annotations
   use_color_distortion: false
   use_gaussian_blur: false
   use_horizontal_flip: false
   preserve_aspect_ratio: true
 logging:
-  folder: ./output/
+  folder: ./output
   write_tag: jepa
 mask:
   allow_overlap: false
