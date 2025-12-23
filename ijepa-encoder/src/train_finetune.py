@@ -213,9 +213,10 @@ def main(args, resume_preempt=False):
         patch_size=patch_size)
 
     # -- init data-loaders/samplers
-    _, unsupervised_loader, unsupervised_sampler = make_charts(
+    unsupervised_loader, unsupervised_sampler = make_charts(
             transform=transform,
             batch_size=batch_size,
+            patch_size=patch_size,
             collator=mask_collator,
             pin_mem=pin_mem,
             num_workers=num_workers,
@@ -224,6 +225,7 @@ def main(args, resume_preempt=False):
             root_path=root_path,
             image_folder=image_folder,
             annotation_folder=annotation_folder,
+            val_train_split=False,
             training=True,
             drop_last=True)
     ipe = len(unsupervised_loader)
@@ -295,7 +297,8 @@ def main(args, resume_preempt=False):
 
     # -- Initialize wandb
     run = wandb.init(
-        entity="bar-ijepa-finetune",
+        entity="bar-ijepa",
+        project='bar-ijepa-finetune',
         mode='offline',
         config={
             'learning-rate': lr,

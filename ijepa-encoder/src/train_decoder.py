@@ -21,6 +21,7 @@ import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import random_split
 
 from src.utils.distributed import (
     init_distributed,
@@ -186,10 +187,10 @@ def main(args, resume_preempt=False):
 
     # -- init data-loaders/samplers
     collator = DefaultCollator()
-    _, train_loader, train_sampler = make_charts(
-            patch_size=patch_size,
+    train_loader, train_sampler, val_loader, val_sampler = make_charts(
             transform=transform,
             batch_size=batch_size,
+            patch_size=patch_size,
             collator=collator,
             pin_mem=pin_mem,
             num_workers=num_workers,
@@ -198,21 +199,8 @@ def main(args, resume_preempt=False):
             root_path=root_path,
             image_folder=image_folder,
             annotation_folder=annotation_folder,
+            val_train_split=True,
             training=True,
-            drop_last=True)
-    _, val_loader, val_sampler = make_charts(
-            patch_size=patch_size,
-            transform=transform,
-            batch_size=batch_size,
-            collator=collator,
-            pin_mem=pin_mem,
-            num_workers=num_workers,
-            world_size=world_size,
-            rank=rank,
-            root_path=root_path,
-            image_folder=image_folder,
-            annotation_folder=annotation_folder,
-            training=False,
             drop_last=True)
     ipe = len(train_loader)
 
@@ -277,7 +265,8 @@ def main(args, resume_preempt=False):
 
     # Initialize wandb
     run = wandb.init(
-        entity='bar-ijepa-detector',
+        entity='bar-ijepa',
+        project='bar-ijepa-detector',
         mode='offline',
         config={
             'learning-rate': lr,
@@ -319,7 +308,7 @@ def main(args, resume_preempt=False):
                             '[mem: %.2e] '
                             '(%.1f ms)'
                             % ('Train' if train else 'Val', epoch + 1, itr,
-                                loss_train_m.avg if train else loss_val_m,
+                                loss_train_m.avg if train else loss_val_m.avg,
                                 org_loss_train_m.avg if train else org_loss_val_m.avg,
                                 cls_loss_train_m.avg if train else cls_loss_val_m.avg,
                                 reg_loss_train_m.avg if train else reg_loss_val_m.avg,
@@ -331,7 +320,7 @@ def main(args, resume_preempt=False):
         def log_wandb(epoch, train):
             run.log({
                 'epoch': epoch + 1,
-                f'loss-{"train" if train else "val"}/total': loss_train_m.avg if train else loss_val_m,
+                f'loss-{"train" if train else "val"}/total': loss_train_m.avg if train else loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/origin': org_loss_train_m.avg if train else org_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/classification': cls_loss_train_m.avg if train else cls_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/regression': reg_loss_train_m.avg if train else reg_loss_val_m.avg,
@@ -354,7 +343,11 @@ def main(args, resume_preempt=False):
                 return p_org, p_cls, p_reg
 
             def loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg):
-                l_org = l_cls = l_reg = l_pts = l_align = 0.
+                l_org = torch.tensor(0., device=device)
+                l_cls = torch.tensor(0., device=device)
+                l_reg = torch.tensor(0., device=device)
+                l_pts = torch.tensor(0., device=device)
+                l_align = torch.tensor(0., device=device)
                 sizes = torch.tensor([c.shape for c in gt_cls], device=device)
 
                 # For each chart in batch individually
@@ -386,15 +379,22 @@ def main(args, resume_preempt=False):
                         l_align += (torch.stack(p_ticks)[:,1] - p_org[i][1]).abs().sum()
 
                 # Weight losses according to scaling factors
-                loss = l_org + l_cls + l_reg + l_pts / 10. + l_align / 1000.
+                l_pts /= 10.
+                l_align /= 1000.
+                loss = l_org + l_cls + l_reg + l_pts + l_align
                 loss = AllReduce.apply(loss)
 
-                return loss, (float(loss), l_org.item(), l_cls.item(), l_reg.item(), l_pts / 10., l_align / 1000.)
+                return loss, (float(loss.item()), l_org.item(), l_cls.item(), l_reg.item(), l_pts.item(), l_align.item())
 
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
-                p_org, p_cls, p_reg = forward()
-                loss, all_losses = loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg)
+                if decoder.training:
+                    p_org, p_cls, p_reg = forward()
+                    loss, all_losses = loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg)
+                else:
+                    with torch.no_grad():
+                        p_org, p_cls, p_reg = forward()
+                        loss, all_losses = loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg)
 
             # Backward & step
             if decoder.training:
@@ -442,7 +442,6 @@ def main(args, resume_preempt=False):
 
             assert not np.isnan(loss), 'loss is nan'
 
-        # TODO check
         # Validation loop
         decoder.eval()
         for itr, (data, targets) in enumerate(val_loader):
@@ -466,8 +465,7 @@ def main(args, resume_preempt=False):
 
         # TODO only save if lower validation loss?
         # -- Save Checkpoint after every epoch
-        logger.info('avg. loss %.3f' % loss_train_m.avg)
-        save_checkpoint(epoch+1)
+        # save_checkpoint(epoch+1)
 
     run.finish()
 

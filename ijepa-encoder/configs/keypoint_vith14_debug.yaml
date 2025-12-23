@@ -1,14 +1,14 @@
 data:
-  batch_size: 4
+  batch_size: 196
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
   - 1.0
   crop_size: 224
   patch_size: 14
-  num_workers: 2
+  num_workers: 10
   pin_mem: false
-  root_path: ./data_small
+  root_path: ./data
   image_folder: images
   annotation_folder: annotations
   preserve_aspect_ratio: true

@@ -190,7 +190,7 @@ def evaluate_gt_p_match(gt_bars, gt_ticks, p_bars, p_ticks, dist_thresh, train):
             matches = (distances < dist_thresh)
 
             # Calculate distances for each ground truth element (inf mask non-matches)
-            distances.masked_fill_(~matches, float('inf'))
+            distances = distances.masked_fill(~matches, float('inf'))
             min_dists, _ = torch.min(distances, dim=1)
 
             # Set min distance to 0 if no matches were found

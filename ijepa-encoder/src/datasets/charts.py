@@ -35,33 +35,46 @@ def make_charts(
     root_path=None,
     image_folder=None,
     annotation_folder=None,
+    val_train_split=True,
     training=True,
     drop_last=True
 ):
+    g = torch.Generator()
+    g.manual_seed(_GLOBAL_SEED)
+
     dataset = Charts(
         patch_size=patch_size,
         root=root_path,
         image_folder=image_folder,
         annotation_folder=annotation_folder,
         transform=transform,
-        train=training)
+        training=training)
     logger.info('Chart dataset created')
-    dist_sampler = torch.utils.data.distributed.DistributedSampler(
-        dataset=dataset,
-        num_replicas=world_size,
-        rank=rank)
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        collate_fn=collator,
-        sampler=dist_sampler,
-        batch_size=batch_size,
-        drop_last=drop_last,
-        pin_memory=pin_mem,
-        num_workers=num_workers,
-        persistent_workers=False)
-    logger.info('Chart unsupervised data loader created')
 
-    return dataset, data_loader, dist_sampler
+    def create_sampler_loader(dataset):
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank)
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            collate_fn=collator,
+            sampler=sampler,
+            batch_size=batch_size,
+            drop_last=drop_last,
+            pin_memory=pin_mem,
+            num_workers=num_workers)
+        logger.info(f'Chart data loader for {len(dataset)} samples created')
+        return loader, sampler
+
+    if val_train_split:
+        train, val = torch.utils.data.random_split(dataset, [0.8, 0.2], g)
+        train_loader, train_sampler = create_sampler_loader(train)
+        val_loader, val_sampler = create_sampler_loader(val)
+        return train_loader, train_sampler, val_loader, val_sampler
+    else:
+        loader, sampler = create_sampler_loader(dataset)
+        return loader, sampler
 
 
 class Charts(torchvision.datasets.DatasetFolder):
@@ -73,7 +86,7 @@ class Charts(torchvision.datasets.DatasetFolder):
         image_folder='images',
         annotation_folder='annotations',
         transform=None,
-        train=True
+        training=True
     ):
         """
         Chart dataset loader
@@ -84,7 +97,7 @@ class Charts(torchvision.datasets.DatasetFolder):
         :param train: whether to load train or test data
         """
 
-        suffix = 'train' if train else 'test'
+        suffix = 'train' if training else 'test'
         img_path = os.path.join(root, suffix, image_folder)
         ann_path = os.path.join(root, suffix, annotation_folder)
         if not os.path.exists(img_path) or not os.path.exists(ann_path):
@@ -114,7 +127,7 @@ class Charts(torchvision.datasets.DatasetFolder):
                     else:
                         self.data_paths.append((img_full_path, ann_full_path))
 
-            logger.info(f'Loaded {len(self.data_paths)} {"training" if train else "test"} images')
+            logger.info(f'Loaded {len(self.data_paths)} {"training" if training else "test"} images')
 
         except FileNotFoundError:
             raise ValueError(f'Number of images and annotations do not match')
