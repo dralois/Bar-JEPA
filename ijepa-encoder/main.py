@@ -32,13 +32,10 @@ parser.add_argument(
 
 def process_main(rank, mode, fname, world_size, devices):
     import os
-    import sys
     os.environ['CUDA_VISIBLE_DEVICES'] = str(devices[rank].split(':')[-1])
 
     logging.basicConfig()
     logger = logging.getLogger()
-    log_handler = logging.StreamHandler(sys.stdout)
-    logger.addHandler(log_handler)
 
     if rank == 0:
         logger.setLevel(logging.INFO)

@@ -1,17 +1,17 @@
 data:
-  batch_size: 2
+  batch_size: 1024
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
   - 1.0
   crop_size: 224
   patch_size: 14
-  num_workers: 1
-  pin_mem: false
+  num_workers: 12
+  pin_mem: true
   root_path: ./data
   image_folder: images
   annotation_folder: annotations
-  preserve_aspect_ratio: true
+  preserve_aspect_ratio: false
 logging:
   folder: ./output
   write_tag: keypoint
@@ -33,7 +33,7 @@ meta:
   do_finetune: false
   use_bfloat16: true
 optimization:
-  epochs: 70
+  epochs: 50
   final_lr: 1.0e-06
   final_weight_decay: 0.4
   ipe_scale: 1.0

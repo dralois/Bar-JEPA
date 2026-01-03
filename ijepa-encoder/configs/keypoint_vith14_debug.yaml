@@ -28,7 +28,7 @@ meta:
   load_checkpoint: true
   model_name: vit_huge
   decoder_type: simple
-  read_checkpoint: model/IN1K-vit.h.14-300e.pth.tar
+  read_checkpoint: model/jepa-ep360.pth.tar
   checkpoint_epoch: 0
   do_finetune: false
   use_bfloat16: true
