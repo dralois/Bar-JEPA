@@ -19,7 +19,7 @@ def cls_pts_to_map(cls_pts_lists, mapsize):
     cls_map = torch.zeros((mapsize[0], mapsize[1]), dtype=torch.long)
     reg_map = torch.zeros((2, mapsize[0], mapsize[1]))
 
-    # [bars, ticks] -> Class 1, 2
+    # [bars, ticks, origin] -> Class 1, 2, 3
     for cls_id, cls_list in enumerate(cls_pts_lists):
         for point in cls_list:
             # Compute map coordinates and regression values
@@ -35,7 +35,8 @@ def cls_pts_to_map(cls_pts_lists, mapsize):
 
 def gt_maps_to_cls_lists(gt_cls, gt_reg, size):
     """
-    Converts ground truth class and regression maps to lists of bar and tick positions.
+    Converts ground truth class and regression maps
+    to lists of bar and tick positions + origin.
 
     :param gt_cls: ground truth class map, shape [H, W].
     :param gt_reg: ground truth regression map, shape [2, H, W].
@@ -43,9 +44,11 @@ def gt_maps_to_cls_lists(gt_cls, gt_reg, size):
 
         - list of bars, [y, x] in image space
         - list of ticks, [y, x] in image space
+        - coordinate origin, [y, x] in image space
     """
     bars = []
     ticks = []
+    org = None
 
     for point in torch.nonzero(gt_cls):
         # Pixel midpoint in image space
@@ -61,15 +64,18 @@ def gt_maps_to_cls_lists(gt_cls, gt_reg, size):
                 bars.append(pos)
             case 2: # Tick
                 ticks.append(pos)
+            case 3: # Coordinate origin, there is only one!
+                org = pos
             case _:
                 raise ValueError(f"Unknown class {gt_cls[point[0], point[1]]}")
 
-    return bars, ticks
+    return bars, ticks, org
 
 
 def p_maps_to_cls_lists(p_cls, p_reg, size, bg_conf_thresh, cls_conf_thresh):
     """
-    Extracts and processes predicted bars and ticks from classification and regression maps.
+    Extracts and processes predicted bars and ticks & origin
+    from classification and regression maps.
 
     :param p_cls: classification map [3, H, W]
     :param p_reg: regression map [2, H, W]
@@ -78,11 +84,13 @@ def p_maps_to_cls_lists(p_cls, p_reg, size, bg_conf_thresh, cls_conf_thresh):
     :return: tuple containing:
 
         - lists of [[y, x], confidence] for predicted bars
-        - list of [[y, x]], confidence] for predicted ticks
+        - lists of [[y, x]], confidence] for predicted ticks
+        - lists of [[y, x]], confidence] for predicted origins
     """
 
     bars = []
     ticks = []
+    orgs = []
 
     # Mask out parts that very likely are background
     pts_mask = torch.sigmoid(p_cls[0]).lt(bg_conf_thresh)
@@ -109,23 +117,37 @@ def p_maps_to_cls_lists(p_cls, p_reg, size, bg_conf_thresh, cls_conf_thresh):
         conf = torch.sigmoid(p_cls[2, point[0], point[1]])
         ticks.append((pos, conf))
 
-    return bars, ticks
+    # Select high confidence candidates from background-masked origin heatmap
+    masked_ticks = (torch.sigmoid(p_cls[3]) * pts_mask).gt(cls_conf_thresh)
+    for point in torch.nonzero(masked_ticks):
+        # Pixel midpoint in image space
+        pos = (point * 2 + 1) / (size * 2)
+        # Offset pixel midpoint by regression value
+        pos += p_reg[:, point[0], point[1]] / size
+        # Store image space prediction and confidence for tick
+        conf = torch.sigmoid(p_cls[3, point[0], point[1]])
+        orgs.append((pos, conf))
+
+    return bars, ticks, orgs
 
 
-def nms(p_bars, p_ticks, radius_thresh):
+def nms(p_bars, p_ticks, p_orgs, radius_thresh):
     """
     Performs non-maximum suppression on predicted bars and ticks.
 
     :param p_bars: list of (position, shape: [2], confidence) for predicted bars
     :param p_ticks: list of (position, shape: [2], confidence) for predicted ticks
+    :param p_orgs: list of (position, shape: [2], confidence) for predicted origins
     :param radius_thresh: threshold distance for considering points as neighbors
     :return: tuple containing:
 
         - list of nms filtered bars
         - list of nms filtered ticks
+        - list of nms filtered origins
     """
     nms_bars = []
     nms_ticks = []
+    nms_orgs = []
 
     # Sort bars by confidence
     if len(p_bars) > 0:
@@ -159,23 +181,41 @@ def nms(p_bars, p_ticks, radius_thresh):
             checked_tick_pts.extend(neighbor_idx)
             nms_ticks.append(pt)
 
-    return nms_bars, nms_ticks
+    # Sort origins by confidence
+    if len(p_orgs) > 0:
+        sorted_org_pts = sorted(p_orgs, key=lambda p: -p[1])
+        all_org_pts = torch.stack([p for p, _ in sorted_org_pts])
+        checked_org_pts = []
+        # Iteratively remove low confidence origins within radius
+        for k, (pt, conf) in enumerate(sorted_org_pts):
+            if k in checked_org_pts:
+                continue
+            # Equal radius for origin
+            distances = torch.abs(all_org_pts[:, 0] - pt[0]) + torch.abs(all_org_pts[:, 1] - pt[1])
+            neighbor_idx = torch.nonzero(distances < radius_thresh).squeeze(1).tolist()
+            # Update checked points and maximum points
+            checked_org_pts.extend(neighbor_idx)
+            nms_orgs.append(pt)
+
+    return nms_bars, nms_ticks, nms_orgs
 
 
-def evaluate_gt_p_match(gt_bars, gt_ticks, p_bars, p_ticks, dist_thresh, train):
+def evaluate_gt_p_match(gt_bars, gt_ticks, gt_org, p_bars, p_ticks, p_orgs, dist_thresh, train):
     """
     Evaluate predicted bars and ticks against ground truth.
 
     :param gt_bars: list of ground truth bar positions, shape [2]
     :param gt_ticks: list of ground truth tick positions, shape [2]
-    :param pred_bars: list of predicted bar positions, shape [2]
-    :param pred_ticks: list of predicted tick positions, shape [2]
+    :param gt_prg: ground truth coordinate origin position, shape [2]
+    :param p_bars: list of predicted bar positions, shape [2]
+    :param p_ticks: list of predicted tick positions, shape [2]
+    :param p_orgs: list of predicted coordinate origins, shape [2]
     :param dist_thresh: distance threshold for considering a match
     :param train: flag indicating whether to return train or eval metrics
     :return: depending on if train / eval: 
 
         - train: total error distance
-        - eval: bar precision, bar recall, tick precision, tick recall
+        - eval: bar precision & recall, tick precision & recall, origin precision & recall
     """
 
     # Helper function, calculates distance to closest p for each gt, or 0 if none exists
@@ -205,10 +245,11 @@ def evaluate_gt_p_match(gt_bars, gt_ticks, p_bars, p_ticks, dist_thresh, train):
     # Calculate matches for ticks & bars
     bar_matches, min_bar_dists = closest_match(gt_bars, p_bars)
     tick_matches, min_tick_dists = closest_match(gt_ticks, p_ticks)
+    org_matches, min_org_dists = closest_match(gt_org, p_orgs)
 
     # If training, return total distance error
     if train:
-        return min_bar_dists + min_tick_dists
+        return min_bar_dists + min_tick_dists + min_org_dists
     else:
         # Calculate precision and recall for bars
         bar_precision = (bar_matches / len(p_bars))
@@ -218,8 +259,12 @@ def evaluate_gt_p_match(gt_bars, gt_ticks, p_bars, p_ticks, dist_thresh, train):
         tick_precision = (tick_matches / len(p_ticks))
         tick_recall = (tick_matches / len(gt_ticks))
 
+        # Calculate precision and recall for ticks
+        org_precision = (org_matches / len(p_orgs))
+        org_recall = (org_precision / len(gt_org))
+
         # Return all metrics
-        return bar_precision, bar_recall, tick_precision, tick_recall
+        return bar_precision, bar_recall, tick_precision, tick_recall, org_precision, org_recall
 
 
 def f1(precision, recall):

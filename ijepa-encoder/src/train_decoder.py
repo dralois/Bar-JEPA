@@ -289,7 +289,6 @@ def main(args, resume_preempt=False):
 
         # Loss tracking
         loss_train_m, loss_val_m = AverageMeter(), AverageMeter()
-        org_loss_train_m, org_loss_val_m = AverageMeter(), AverageMeter()
         cls_loss_train_m, cls_loss_val_m = AverageMeter(), AverageMeter()
         reg_loss_train_m, reg_loss_val_m = AverageMeter(), AverageMeter()
         pts_loss_train_m, pts_loss_val_m = AverageMeter(), AverageMeter()
@@ -297,24 +296,22 @@ def main(args, resume_preempt=False):
         time_meter = AverageMeter()
 
         def load_charts(data, targets):
-            gt_org, gt_cls, gt_reg = targets
+            gt_cls, gt_reg = targets
             imgs = [img.to(device, non_blocking=True) for img in data]
             grids = [(img.shape[1] // patch_size, img.shape[2] // patch_size) for img in imgs]
-            gt_org = [gt.to(device, non_blocking=True) for gt in gt_org]
             gt_cls = [gt.to(device, non_blocking=True) for gt in gt_cls]
             gt_reg = [gt.to(device, non_blocking=True) for gt in gt_reg]
-            return (imgs, grids, gt_org, gt_cls, gt_reg)
+            return (imgs, grids, gt_cls, gt_reg)
 
         def log_stats(epoch, itr, loss, etime, train):
             csv_logger.log(epoch + 1, itr, loss, etime)
             if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
                 logger.info('%s: [%d, %5d] loss: %.3f '
-                            '[%.3f + %.3f + %.3f + %.3f + %.3f] '
+                            '[%.3f + %.3f + %.3f + %.3f] '
                             '[mem: %.2e] '
                             '(%.1f ms)'
                             % ('Train' if train else 'Val', epoch + 1, itr,
                                 loss_train_m.avg if train else loss_val_m.avg,
-                                org_loss_train_m.avg if train else org_loss_val_m.avg,
                                 cls_loss_train_m.avg if train else cls_loss_val_m.avg,
                                 reg_loss_train_m.avg if train else reg_loss_val_m.avg,
                                 pts_loss_train_m.avg if train else pts_loss_val_m.avg,
@@ -326,7 +323,6 @@ def main(args, resume_preempt=False):
             run.log({
                 'epoch': epoch + 1,
                 f'loss-{"train" if train else "val"}/total': loss_train_m.avg if train else loss_val_m.avg,
-                f'loss-{"train" if train else "val"}/origin': org_loss_train_m.avg if train else org_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/classification': cls_loss_train_m.avg if train else cls_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/regression': reg_loss_train_m.avg if train else reg_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/points': pts_loss_train_m.avg if train else pts_loss_val_m.avg,
@@ -334,7 +330,7 @@ def main(args, resume_preempt=False):
                 'gpu-mem': torch.cuda.max_memory_allocated() / 1024.**2
             })
 
-        def step(imgs, grids, gt_org, gt_cls, gt_reg):
+        def step(imgs, grids, gt_cls, gt_reg):
             # Update learning rate
             if decoder.training:
                 scheduler.step()
@@ -344,11 +340,10 @@ def main(args, resume_preempt=False):
                 # Charts -> Embeddings
                 h = encoder(imgs, grids)
                 # Embeddings -> Predictions
-                p_org, p_cls, p_reg = decoder(h, grids)
-                return p_org, p_cls, p_reg
+                p_cls, p_reg = decoder(h, grids)
+                return p_cls, p_reg
 
-            def loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg):
-                l_org = torch.tensor(0., device=device)
+            def loss_fn(p_cls, gt_cls, p_reg, gt_reg):
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
                 l_pts = torch.tensor(0., device=device)
@@ -356,10 +351,7 @@ def main(args, resume_preempt=False):
                 sizes = torch.tensor([c.shape for c in gt_cls], device=device)
 
                 # For each chart in batch individually
-                for i in range(len(p_org)):
-                    # Coordinate system origin loss
-                    l_org += F.smooth_l1_loss(p_org[i], gt_org[i])
-
+                for i in range(len(p_cls)):
                     # Weighted classification loss
                     l_cls += F.cross_entropy(p_cls[i].unsqueeze(0), gt_cls[i].unsqueeze(0), weight=cls_weights, reduction='mean')
 
@@ -371,35 +363,38 @@ def main(args, resume_preempt=False):
                     # Radius for nms and l_pts is based on max(H, W)
                     radius_thresh = eval_thresh / sizes[i].max()
                     # Convert maps to lists of bars & ticks
-                    gt_bars, gt_ticks = gt_maps_to_cls_lists(gt_cls[i], gt_reg[i], sizes[i])
-                    p_bars, p_ticks = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
+                    gt_bars, gt_ticks, gt_org = gt_maps_to_cls_lists(gt_cls[i], gt_reg[i], sizes[i])
+                    p_bars, p_ticks, p_orgs = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
                     # Filter predictions using nms
-                    p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
+                    p_bars, p_ticks, p_orgs = nms(p_bars, p_ticks, p_orgs, radius_thresh)
 
                     # Within class point loss
-                    l_pts += evaluate_gt_p_match(gt_bars, gt_ticks, p_bars, p_ticks, radius_thresh, True)
+                    l_pts += evaluate_gt_p_match(
+                        gt_bars, gt_ticks, [gt_org],
+                        p_bars, p_ticks, p_orgs,
+                        radius_thresh, True)
 
                     # Chart specific loss: Aligns tick x coordinates
-                    if len(p_ticks) > 0:
-                        l_align += (torch.stack(p_ticks)[:,1] - p_org[i][1]).abs().sum()
+                    if len(p_ticks) > 0 & len(p_orgs) > 0:
+                        l_align += (torch.stack(p_ticks)[:,1] - p_orgs[i][0][1]).abs().sum()
 
                 # Weight losses according to scaling factors
                 l_pts /= 10.
                 l_align /= 1000.
-                loss = l_org + l_cls + l_reg + l_pts + l_align
+                loss = l_cls + l_reg # + l_pts + l_align
                 loss = AllReduce.apply(loss)
 
-                return loss, (float(loss.item()), l_org.item(), l_cls.item(), l_reg.item(), l_pts.item(), l_align.item())
+                return loss, (float(loss.item()), l_cls.item(), l_reg.item(), l_pts.item(), l_align.item())
 
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                 if decoder.training:
-                    p_org, p_cls, p_reg = forward()
-                    loss, all_losses = loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg)
+                    p_cls, p_reg = forward()
+                    loss, all_losses = loss_fn(p_cls, gt_cls, p_reg, gt_reg)
                 else:
                     with torch.no_grad():
-                        p_org, p_cls, p_reg = forward()
-                        loss, all_losses = loss_fn(p_org, gt_org, p_cls, gt_cls, p_reg, gt_reg)
+                        p_cls, p_reg = forward()
+                        loss, all_losses = loss_fn(p_cls, gt_cls, p_reg, gt_reg)
 
             # Backward & step
             if decoder.training:
@@ -415,9 +410,8 @@ def main(args, resume_preempt=False):
             return all_losses
 
         def update_meters(losses, train):
-            loss, l_org, l_cls, l_reg, l_pts, l_alg = losses
+            loss, l_cls, l_reg, l_pts, l_alg = losses
             (loss_train_m if train else loss_val_m).update(loss)
-            (org_loss_train_m if train else org_loss_val_m).update(l_org)
             (cls_loss_train_m if train else cls_loss_val_m).update(l_cls)
             (reg_loss_train_m if train else reg_loss_val_m).update(l_reg)
             (pts_loss_train_m if train else pts_loss_val_m).update(l_pts)
@@ -428,13 +422,12 @@ def main(args, resume_preempt=False):
         decoder.train()
         for itr, (data, targets) in enumerate(train_loader):
 
-            imgs, grids, gt_org, gt_cls, gt_reg = load_charts(data, targets)
+            imgs, grids, gt_cls, gt_reg = load_charts(data, targets)
 
             losses, etime = gpu_timer(
                 step,
                 imgs=imgs,
                 grids=grids,
-                gt_org=gt_org,
                 gt_cls=gt_cls,
                 gt_reg=gt_reg
             )
@@ -451,13 +444,12 @@ def main(args, resume_preempt=False):
         decoder.eval()
         for itr, (data, targets) in enumerate(val_loader):
 
-            imgs, grids, gt_org, gt_cls, gt_reg = load_charts(data, targets)
+            imgs, grids, gt_cls, gt_reg = load_charts(data, targets)
 
             losses, etime = gpu_timer(
                 step,
                 imgs=imgs,
                 grids=grids,
-                gt_org=gt_org,
                 gt_cls=gt_cls,
                 gt_reg=gt_reg
             )

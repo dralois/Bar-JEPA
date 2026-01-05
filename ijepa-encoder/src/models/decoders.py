@@ -99,7 +99,7 @@ class KeypointDetector(nn.Module):
         max_patches,
         in_channels=1280,
         num_keypoints=64,
-        num_classes=3,
+        num_classes=4,
         decoder_type='simple',
         init_std=0.02,
     ):
@@ -109,7 +109,7 @@ class KeypointDetector(nn.Module):
         :param max_patches: max. number of patches (H*W).
         :param in_channels: number of input channels from the backbone.
         :param num_keypoints: max. number of keypoints.
-        :param num_classes: number of keypoint classes (e.g., tick, bar, background).
+        :param num_classes: number of keypoint classes (e.g., tick, bar, origin, background).
         :param decoder_type: type of decoder ('simple' or 'classic').
         """
         super().__init__()
@@ -135,12 +135,6 @@ class KeypointDetector(nn.Module):
             nn.Conv2d(num_keypoints, 2, 1, 1, 0),
             nn.Tanh()
         ) # Predicts (dx, dy) offsets
-
-        self.fc_org = nn.Sequential(
-            nn.Flatten(start_dim=0),
-            nn.Linear(max_patches * in_channels, 2),
-            nn.Sigmoid()
-        ) # Predicts coordinate origin directly
 
         self.drop_layer = nn.Dropout(p=0.5)
 
@@ -168,15 +162,11 @@ class KeypointDetector(nn.Module):
         :param grids: list of grid shapes: B x [H, W]
         :return: tuple containing:
 
-            - predicted (y, x) origin coordinates, shape: B x [2]
             - predicted class probabilities, shape: B x [ncls, H*4, W*4]
             - predicted (dy, dx) offsets, shape: B x [2, H*4, W*4]
         """
-        org_preds = []
         cls_preds = []
         reg_preds = []
-
-        x = self.drop_layer(x)
 
         # Process each element in the batch separately to handle variable grid sizes
         for i in range(x.size(0)):
@@ -186,9 +176,6 @@ class KeypointDetector(nn.Module):
             valid_x = x[i, :num_patches]
             valid_x = valid_x.permute(1, 0).view(1, -1, grids[i][0], grids[i][1])
 
-            # Origin prediction: [1, N, D] -> [N * D] -> [2]
-            org_preds.append(self.fc_org(x[i]))
-
             # Get feature map from the decoder [C_out, H*4, W*4]
             valid_x = self.decoder(valid_x)
             valid_x = self.drop_layer(valid_x)
@@ -197,4 +184,4 @@ class KeypointDetector(nn.Module):
             cls_preds.append(self.fc_cls(valid_x))
             reg_preds.append(self.fc_reg(valid_x))
 
-        return org_preds, cls_preds, reg_preds
+        return cls_preds, reg_preds

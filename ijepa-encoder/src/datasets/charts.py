@@ -153,7 +153,7 @@ class Charts(torchvision.datasets.DatasetFolder):
 
         # Coordinate system origin is normalized
         size = torch.tensor([float(v) for v in ann['chart_metadata']['size']['bbox'][2:]])
-        gt_org = (torch.tensor([float(v) for v in ann['chart_metadata']['origin']['bbox'][:2]]) / size).flip(-1)
+        org = [torch.tensor([float(v) for v in ann['chart_metadata']['origin']['bbox'][:2]]) / size]
 
         ticks = []
         # Ticks are normalized x,y coordinates of the tick location
@@ -169,6 +169,6 @@ class Charts(torchvision.datasets.DatasetFolder):
         # Map size depends on image size
         mapsize = (torch.tensor(img.shape[1:3]) // self.patch_size) * 4
         # Generate class and regression maps
-        gt_cls, gt_reg = cls_pts_to_map([bars, ticks], mapsize)
+        gt_cls, gt_reg = cls_pts_to_map([bars, ticks, org], mapsize)
 
-        return img, (gt_org, gt_cls, gt_reg)
+        return img, (gt_cls, gt_reg)
