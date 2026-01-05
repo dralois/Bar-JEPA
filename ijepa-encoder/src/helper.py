@@ -46,7 +46,7 @@ def load_ijepa_checkpoint(
 ):
     try:
         checkpoint = torch.load(r_path, map_location=torch.device('cpu'))
-        print(list(checkpoint.keys()))
+        logger.info(list(checkpoint.keys()))
         epoch = checkpoint['epoch']
 
         # -- loading encoder
@@ -99,7 +99,7 @@ def load_decoder_checkpoint(
 ):
     try:
         checkpoint = torch.load(r_path, map_location=torch.device('cpu'))
-        print(list(checkpoint.keys()))
+        logger.info(list(checkpoint.keys()))
         epoch = checkpoint['epoch']
 
         # -- loading encoder

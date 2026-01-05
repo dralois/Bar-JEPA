@@ -54,7 +54,7 @@ from src.transforms import make_transforms
 # --
 log_timings = True
 log_freq = 10
-checkpoint_freq = 50
+checkpoint_freq = 10
 # --
 
 _GLOBAL_SEED = 0
@@ -71,7 +71,6 @@ def main(args, resume_preempt=False):
     #  PASSED IN PARAMS FROM CONFIG FILE
     # ----------------------------------------------------------------------- #
 
-    # TODO
     # -- MODEL
     use_bfloat16 = args['meta']['use_bfloat16']
     model_name = args['meta']['model_name']
@@ -117,11 +116,17 @@ def main(args, resume_preempt=False):
     dump = os.path.join(folder, 'params-decoder.yaml')
     with open(dump, 'w') as f:
         yaml.dump(args, f)
+
+    logger.info(f"Python version: {sys.version}, PyTorch version: {torch.__version__}")
     # ----------------------------------------------------------------------- #
 
     # -- create device
     if not torch.cuda.is_available():
-        device = torch.device('cpu') if not torch.mps.is_available() else torch.device('mps')
+        try:
+            device = torch.device('cpu') if not torch.mps.is_available() else torch.device('mps')
+        except AttributeError:
+            device = torch.device('cpu')
+        logger.warning(f'Falling back to {device.type}.')
     else:
         device = torch.device('cuda:0')
         torch.cuda.set_device(device)
@@ -463,9 +468,8 @@ def main(args, resume_preempt=False):
             log_stats(epoch, itr, loss, etime, False)
             log_wandb(epoch, False)
 
-        # TODO only save if lower validation loss?
         # -- Save Checkpoint after every epoch
-        # save_checkpoint(epoch+1)
+        save_checkpoint(epoch+1)
 
     run.finish()
 
