@@ -50,7 +50,7 @@ def process_main(rank, mode, fname, world_size, devices):
         params = yaml.safe_load(y_file)
         logger.info('loaded params...')
         pp = pprint.PrettyPrinter(indent=4)
-        pp.pprint(params)
+        logger.info(pp.pformat(params))
 
     world_size, rank = init_distributed(rank_and_world_size=(rank, world_size))
     logger.info(f'Running... (rank: {rank}/{world_size})')
