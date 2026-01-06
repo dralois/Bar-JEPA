@@ -76,8 +76,8 @@ def main(args, resume_preempt=False):
     model_name = args['meta']['model_name']
     decoder_type = args['meta']['decoder_type']
     load_model = args['meta']['load_checkpoint'] or resume_preempt
-    ckpt_epoch = args['meta']['checkpoint_epoch']
     do_finetune = args['meta']['do_finetune']
+    finetune_epoch = args['meta']['finetune_epoch']
     r_file = args['meta']['read_checkpoint']
 
     # -- DATA
@@ -98,6 +98,8 @@ def main(args, resume_preempt=False):
     cls_thresh = args['keypoint']['cls_conf_thresh']
     eval_thresh = args['keypoint']['eval_thresh']
     cls_weights = args['keypoint']['class_weights']
+    use_pts_loss = args['keypoint']['use_pts_loss']
+    use_align_loss = args['keypoint']['use_align_loss']
 
     # -- OPTIMIZATION
     ipe_scale = args['optimization']['ipe_scale']
@@ -222,7 +224,7 @@ def main(args, resume_preempt=False):
         wd=wd,
         final_wd=final_wd,
         final_lr=final_lr,
-        use_bfloat16=use_bfloat16,
+        device=device.type,
         ipe_scale=ipe_scale)
 
     if world_size != 1:
@@ -245,7 +247,7 @@ def main(args, resume_preempt=False):
             opt=optimizer,
             scaler=scaler)
         if do_finetune:
-            start_epoch -= (ckpt_epoch - 1)
+            start_epoch -= (finetune_epoch - 1)
         for _ in range(start_epoch*ipe):
             scheduler.step()
             wd_scheduler.step()
@@ -402,7 +404,11 @@ def main(args, resume_preempt=False):
                 # Weight losses according to scaling factors
                 l_pts /= 10.
                 l_align /= 1000.
-                loss: torch.Tensor = l_org + l_cls + l_reg # + l_pts + l_align
+                loss: torch.Tensor = l_org + l_cls + l_reg
+                if use_pts_loss:
+                    loss += l_pts
+                if use_align_loss:
+                    loss += l_align
                 loss = AllReduce.apply(loss) # type: ignore
 
                 return loss, (
