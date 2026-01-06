@@ -375,8 +375,9 @@ def main(args, resume_preempt=False):
                         radius_thresh, True)
 
                     # Chart specific loss: Aligns tick x coordinates
-                    if len(p_ticks) > 0 & len(p_orgs) > 0:
-                        l_align += (torch.stack(p_ticks)[:,1] - p_orgs[i][0][1]).abs().sum()
+                    if len(p_ticks) > 0 and len(p_orgs) > 0:
+                        # Uses highest confidence origin point for loss
+                        l_align += (torch.stack(p_ticks)[:,1] - p_orgs[0][1]).abs().sum()
 
                 # Weight losses according to scaling factors
                 l_pts /= 10.
