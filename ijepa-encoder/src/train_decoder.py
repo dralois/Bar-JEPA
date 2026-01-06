@@ -284,7 +284,7 @@ def main(args, resume_preempt=False):
         alg_loss_train_m, alg_loss_val_m = AverageMeter(), AverageMeter()
         time_meter = AverageMeter()
 
-        def save_checkpoint(best_val_loss):
+        def save_checkpoint(best = False):
             save_dict = {
                 'encoder': encoder.state_dict(),
                 'decoder': decoder.state_dict(),
@@ -298,8 +298,7 @@ def main(args, resume_preempt=False):
             }
             if rank == 0:
                 torch.save(save_dict, latest_path)
-                if loss_val_m.avg < best_val_loss:
-                    best_val_loss = loss_val_m.avg
+                if best:
                     torch.save(save_dict, best_path)
                 if (epoch + 1) % checkpoint_freq == 0:
                     torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
@@ -482,7 +481,8 @@ def main(args, resume_preempt=False):
             iteration_wrapper(itr, data, targets, False)
 
         # -- Save Checkpoint after every epoch
-        save_checkpoint(best_val_loss)
+        save_checkpoint(loss_val_m.avg < best_val_loss)
+        best_val_loss = min(loss_val_m.avg, best_val_loss)
 
     run.finish()
 
