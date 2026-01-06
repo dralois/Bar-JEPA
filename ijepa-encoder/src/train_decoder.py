@@ -387,7 +387,7 @@ def main(args, resume_preempt=False):
                     p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
 
                     # Origin loss
-                    l_org = F.smooth_l1_loss(p_org, gt_orgs[i])
+                    l_org += F.smooth_l1_loss(p_org, gt_orgs[i])
 
                     # Within class point loss
                     l_pts += evaluate_gt_p_match(
