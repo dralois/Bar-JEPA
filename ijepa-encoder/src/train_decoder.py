@@ -53,8 +53,8 @@ from src.transforms import make_transforms
 
 # --
 log_timings = True
-log_freq = 10
-checkpoint_freq = 10
+log_freq = 5
+checkpoint_freq = 25
 # --
 
 _GLOBAL_SEED = 0
@@ -136,7 +136,8 @@ def main(args, resume_preempt=False):
         autocast_dtype = torch.bfloat16 if (
             use_bfloat16 and (
                 torch.cuda.is_bf16_supported() or
-                torch.cpu._is_avx512_bf16_supported()
+                torch.cpu._is_avx512_bf16_supported() or
+                device.type == 'mps'
             )
         ) else (torch.float16 if use_bfloat16 else torch.float32)
     except Exception as e:
@@ -159,6 +160,7 @@ def main(args, resume_preempt=False):
     log_file = os.path.join(folder, f'{tag}_r{rank}.csv')
     save_path = os.path.join(folder, f'{tag}' + '-ep{epoch}.pth.tar')
     latest_path = os.path.join(folder, f'{tag}-latest.pth.tar')
+    best_path = os.path.join(folder, f'{tag}-best.pth.tar')
     load_path = None
     if load_model:
         load_path = os.path.join(folder, r_file) if r_file is not None else latest_path
@@ -192,7 +194,7 @@ def main(args, resume_preempt=False):
 
     # -- init data-loaders/samplers
     collator = DefaultCollator()
-    train_loader, train_sampler, val_loader, val_sampler = make_charts(
+    train_loader, train_sampler, val_loader, val_sampler = make_charts( # type: ignore
             transform=transform,
             batch_size=batch_size,
             patch_size=patch_size,
@@ -248,23 +250,6 @@ def main(args, resume_preempt=False):
             scheduler.step()
             wd_scheduler.step()
 
-    def save_checkpoint(epoch):
-        save_dict = {
-            'encoder': encoder.state_dict(),
-            'decoder': decoder.state_dict(),
-            'opt': optimizer.state_dict(),
-            'scaler': None if scaler is None else scaler.state_dict(),
-            'epoch': epoch,
-            'loss': loss_train_m.avg,
-            'batch_size': batch_size,
-            'world_size': world_size,
-            'lr': lr
-        }
-        if rank == 0:
-            torch.save(save_dict, latest_path)
-            if (epoch + 1) % checkpoint_freq == 0:
-                torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
-
     # Class weights: [None, bar, tick]
     cls_weights = torch.tensor(cls_weights).to(device)
 
@@ -280,6 +265,7 @@ def main(args, resume_preempt=False):
     )
 
     # -- TRAIN / VAL LOOP
+    best_val_loss = float('inf')
     for epoch in range(start_epoch, num_epochs):
         logger.info(f'Epoch {epoch + 1}')
 
@@ -289,48 +275,75 @@ def main(args, resume_preempt=False):
 
         # Loss tracking
         loss_train_m, loss_val_m = AverageMeter(), AverageMeter()
+        org_loss_train_m, org_loss_val_m = AverageMeter(), AverageMeter()
         cls_loss_train_m, cls_loss_val_m = AverageMeter(), AverageMeter()
         reg_loss_train_m, reg_loss_val_m = AverageMeter(), AverageMeter()
         pts_loss_train_m, pts_loss_val_m = AverageMeter(), AverageMeter()
         alg_loss_train_m, alg_loss_val_m = AverageMeter(), AverageMeter()
         time_meter = AverageMeter()
 
+        def save_checkpoint(best_val_loss):
+            save_dict = {
+                'encoder': encoder.state_dict(),
+                'decoder': decoder.state_dict(),
+                'opt': optimizer.state_dict(),
+                'scaler': None if scaler is None else scaler.state_dict(),
+                'epoch': epoch,
+                'loss': loss_val_m.avg,
+                'batch_size': batch_size,
+                'world_size': world_size,
+                'lr': lr
+            }
+            if rank == 0:
+                torch.save(save_dict, latest_path)
+                if loss_val_m.avg < best_val_loss:
+                    best_val_loss = loss_val_m.avg
+                    torch.save(save_dict, best_path)
+                if (epoch + 1) % checkpoint_freq == 0:
+                    torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
+
         def load_charts(data, targets):
-            gt_cls, gt_reg = targets
+            gt_orgs, gt_cls, gt_reg = targets
             imgs = [img.to(device, non_blocking=True) for img in data]
             grids = [(img.shape[1] // patch_size, img.shape[2] // patch_size) for img in imgs]
+            gt_orgs = [gt.to(device, non_blocking=True) for gt in gt_orgs]
             gt_cls = [gt.to(device, non_blocking=True) for gt in gt_cls]
             gt_reg = [gt.to(device, non_blocking=True) for gt in gt_reg]
-            return (imgs, grids, gt_cls, gt_reg)
+            return (imgs, grids, gt_orgs, gt_cls, gt_reg)
 
-        def log_stats(epoch, itr, loss, etime, train):
+        def log_stats(itr, loss, etime, train):
             csv_logger.log(epoch + 1, itr, loss, etime)
+            mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
+                   else torch.cuda.max_memory_allocated()) / 1024.**2
             if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
                 logger.info('%s: [%d, %5d] loss: %.3f '
-                            '[%.3f + %.3f + %.3f + %.3f] '
+                            '[%.3f + %.3f + %.3f + %.3f + %.3f] '
                             '[mem: %.2e] '
                             '(%.1f ms)'
                             % ('Train' if train else 'Val', epoch + 1, itr,
                                 loss_train_m.avg if train else loss_val_m.avg,
+                                org_loss_train_m.avg if train else org_loss_val_m.avg,
                                 cls_loss_train_m.avg if train else cls_loss_val_m.avg,
                                 reg_loss_train_m.avg if train else reg_loss_val_m.avg,
                                 pts_loss_train_m.avg if train else pts_loss_val_m.avg,
                                 alg_loss_train_m.avg if train else alg_loss_val_m.avg,
-                                torch.cuda.max_memory_allocated() / 1024.**2,
-                                time_meter.avg))
+                                mem, time_meter.avg))
 
-        def log_wandb(epoch, train):
+        def log_wandb(train):
+            mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
+                   else torch.cuda.max_memory_allocated()) / 1024.**2
             run.log({
                 'epoch': epoch + 1,
                 f'loss-{"train" if train else "val"}/total': loss_train_m.avg if train else loss_val_m.avg,
+                f'loss-{"train" if train else "val"}/origin': org_loss_train_m.avg if train else org_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/classification': cls_loss_train_m.avg if train else cls_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/regression': reg_loss_train_m.avg if train else reg_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/points': pts_loss_train_m.avg if train else pts_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/align': alg_loss_train_m.avg if train else alg_loss_val_m.avg,
-                'gpu-mem': torch.cuda.max_memory_allocated() / 1024.**2
+                'gpu-mem': mem
             })
 
-        def step(imgs, grids, gt_cls, gt_reg):
+        def step(imgs, grids, gt_orgs, gt_cls, gt_reg):
             # Update learning rate
             if decoder.training:
                 scheduler.step()
@@ -343,7 +356,8 @@ def main(args, resume_preempt=False):
                 p_cls, p_reg = decoder(h, grids)
                 return p_cls, p_reg
 
-            def loss_fn(p_cls, gt_cls, p_reg, gt_reg):
+            def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg):
+                l_org = torch.tensor(0., device=device)
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
                 l_pts = torch.tensor(0., device=device)
@@ -352,8 +366,11 @@ def main(args, resume_preempt=False):
 
                 # For each chart in batch individually
                 for i in range(len(p_cls)):
-                    # Weighted classification loss
-                    l_cls += F.cross_entropy(p_cls[i].unsqueeze(0), gt_cls[i].unsqueeze(0), weight=cls_weights, reduction='mean')
+                    # Weighted classification loss (origin is excluded)
+                    l_cls += F.cross_entropy(
+                        p_cls[i][:3].unsqueeze(0),
+                        gt_cls[i].unsqueeze(0),
+                        weight=cls_weights, reduction='mean')
 
                     # Regression loss only on non-background samples
                     gt_reg_masked = torch.masked_select(gt_reg[i], gt_cls[i].gt(0))
@@ -362,40 +379,50 @@ def main(args, resume_preempt=False):
 
                     # Radius for nms and l_pts is based on max(H, W)
                     radius_thresh = eval_thresh / sizes[i].max()
-                    # Convert maps to lists of bars & ticks
-                    gt_bars, gt_ticks, gt_org = gt_maps_to_cls_lists(gt_cls[i], gt_reg[i], sizes[i])
-                    p_bars, p_ticks, p_orgs = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
+                    # Convert maps to lists of bars & ticks + origin
+                    gt_bars, gt_ticks = gt_maps_to_cls_lists(gt_cls[i], gt_reg[i], sizes[i])
+                    p_bars, p_ticks, p_org = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
                     # Filter predictions using nms
-                    p_bars, p_ticks, p_orgs = nms(p_bars, p_ticks, p_orgs, radius_thresh)
+                    p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
+
+                    # Origin loss
+                    l_org = F.smooth_l1_loss(p_org, gt_orgs[i])
 
                     # Within class point loss
                     l_pts += evaluate_gt_p_match(
-                        gt_bars, gt_ticks, [gt_org],
-                        p_bars, p_ticks, p_orgs,
-                        radius_thresh, True)
+                        gt_bars, gt_ticks,
+                        p_bars, p_ticks,
+                        radius_thresh) # type: ignore
 
                     # Chart specific loss: Aligns tick x coordinates
-                    if len(p_ticks) > 0 and len(p_orgs) > 0:
+                    if len(p_ticks) > 0:
                         # Uses highest confidence origin point for loss
-                        l_align += (torch.stack(p_ticks)[:,1] - p_orgs[0][1]).abs().sum()
+                        l_align += (torch.stack(p_ticks)[:,1] - p_org[1]).abs().sum()
 
                 # Weight losses according to scaling factors
                 l_pts /= 10.
                 l_align /= 1000.
-                loss = l_cls + l_reg # + l_pts + l_align
-                loss = AllReduce.apply(loss)
+                loss: torch.Tensor = l_org + l_cls + l_reg # + l_pts + l_align
+                loss = AllReduce.apply(loss) # type: ignore
 
-                return loss, (float(loss.item()), l_cls.item(), l_reg.item(), l_pts.item(), l_align.item())
+                return loss, (
+                    float(loss.item()),
+                    l_org.item(),
+                    l_cls.item(),
+                    l_reg.item(),
+                    l_pts.item(),
+                    l_align.item()
+                )
 
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                 if decoder.training:
                     p_cls, p_reg = forward()
-                    loss, all_losses = loss_fn(p_cls, gt_cls, p_reg, gt_reg)
+                    loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
                 else:
                     with torch.no_grad():
                         p_cls, p_reg = forward()
-                        loss, all_losses = loss_fn(p_cls, gt_cls, p_reg, gt_reg)
+                        loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
 
             # Backward & step
             if decoder.training:
@@ -411,60 +438,47 @@ def main(args, resume_preempt=False):
             return all_losses
 
         def update_meters(losses, train):
-            loss, l_cls, l_reg, l_pts, l_alg = losses
+            loss, l_org, l_cls, l_reg, l_pts, l_alg = losses
             (loss_train_m if train else loss_val_m).update(loss)
+            (org_loss_train_m if train else org_loss_val_m).update(l_org)
             (cls_loss_train_m if train else cls_loss_val_m).update(l_cls)
             (reg_loss_train_m if train else reg_loss_val_m).update(l_reg)
             (pts_loss_train_m if train else pts_loss_val_m).update(l_pts)
             (alg_loss_train_m if train else alg_loss_val_m).update(l_alg)
             return loss
 
-        # Train loop
-        decoder.train()
-        for itr, (data, targets) in enumerate(train_loader):
-
-            imgs, grids, gt_cls, gt_reg = load_charts(data, targets)
+        def iteration_wrapper(itr, data, targets, train):
+            imgs, grids, gt_orgs, gt_cls, gt_reg = load_charts(data, targets)
 
             losses, etime = gpu_timer(
                 step,
                 imgs=imgs,
                 grids=grids,
+                gt_orgs=gt_orgs,
                 gt_cls=gt_cls,
                 gt_reg=gt_reg
             )
 
-            loss = update_meters(losses, True)
+            loss = update_meters(losses, train)
             time_meter.update(etime)
 
-            log_stats(epoch, itr, loss, etime, True)
-            log_wandb(epoch, True)
+            log_stats(itr, loss, etime, train)
+            log_wandb(train)
 
-            assert not np.isnan(loss), 'loss is nan'
+        # Train loop
+        decoder.train()
+        for itr, (data, targets) in enumerate(train_loader):
+            iteration_wrapper(itr, data, targets, True)
 
         # Validation loop
         decoder.eval()
         for itr, (data, targets) in enumerate(val_loader):
-
-            imgs, grids, gt_cls, gt_reg = load_charts(data, targets)
-
-            losses, etime = gpu_timer(
-                step,
-                imgs=imgs,
-                grids=grids,
-                gt_cls=gt_cls,
-                gt_reg=gt_reg
-            )
-
-            loss = update_meters(losses, False)
-            time_meter.update(etime)
-
-            log_stats(epoch, itr, loss, etime, False)
-            log_wandb(epoch, False)
+            iteration_wrapper(itr, data, targets, False)
 
         # -- Save Checkpoint after every epoch
-        save_checkpoint(epoch+1)
+        save_checkpoint(best_val_loss)
 
     run.finish()
 
 if __name__ == '__main__':
-    main()
+    main({})

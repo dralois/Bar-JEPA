@@ -14,7 +14,7 @@ data:
   preserve_aspect_ratio: false
 logging:
   folder: ./output
-  write_tag: keypoint-simple
+  write_tag: keypoint-classic-noarp
 keypoint:
   max_keypoints: 64
   pnt_detect_thresh: 0.9
@@ -27,8 +27,8 @@ keypoint:
 meta:
   load_checkpoint: true
   model_name: vit_huge
-  decoder_type: simple
-  read_checkpoint: model/jepa-ep360.pth.tar
+  decoder_type: classic
+  read_checkpoint: model/jepa-noarp.pth.tar
   checkpoint_epoch: 0
   do_finetune: false
   use_bfloat16: true

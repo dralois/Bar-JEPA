@@ -24,7 +24,6 @@ keypoint:
   - 0.05
   - 1.0
   - 1.0
-  - 1.0
 meta:
   load_checkpoint: true
   model_name: vit_huge

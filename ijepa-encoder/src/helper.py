@@ -27,10 +27,12 @@ def convert_ddp(checkpoint_dict, do_convert):
     if not do_convert:
         return checkpoint_dict
 
+    # remove 'module:' tag
     checkpoint_cpy = OrderedDict()
     for k, v in checkpoint_dict.items():
-        name = k[len('module:'):]  # remove 'module.' of DataParallel/DistributedDataParallel
+        name = k[len('module:'):] if k.startswith('module:') else k
         checkpoint_cpy[name] = v
+
     return checkpoint_cpy
 
 
@@ -52,31 +54,31 @@ def load_ijepa_checkpoint(
         # -- loading encoder
         pretrained_dict = convert_ddp(checkpoint['encoder'], world_size == 1)
         msg = encoder.load_state_dict(pretrained_dict)
-        logger.info(f'loaded pretrained encoder from epoch {epoch} with msg: {msg}')
+        logger.info(f'loaded pretrained encoder from epoch {epoch + 1} with msg: {msg}')
 
         # -- loading predictor
         if predictor is not None:
             pretrained_dict = convert_ddp(checkpoint['predictor'], world_size == 1)
             msg = predictor.load_state_dict(pretrained_dict)
-            logger.info(f'loaded pretrained predictor from epoch {epoch} with msg: {msg}')
+            logger.info(f'loaded pretrained predictor from epoch {epoch + 1} with msg: {msg}')
 
         # -- loading target_encoder
         if target_encoder is not None:
             pretrained_dict = convert_ddp(checkpoint['target_encoder'], world_size == 1)
             msg = target_encoder.load_state_dict(pretrained_dict)
-            logger.info(f'loaded pretrained target encoder from epoch {epoch} with msg: {msg}')
+            logger.info(f'loaded pretrained target encoder from epoch {epoch + 1} with msg: {msg}')
 
         # -- loading optimizer
         if opt is not None and not do_finetune:
             pretrained_dict = checkpoint['opt']
             msg = opt.load_state_dict(pretrained_dict)
-            logger.info(f'loaded optimizer from epoch {epoch} with msg: {msg}')
+            logger.info(f'loaded optimizer from epoch {epoch + 1} with msg: {msg}')
 
         # -- loading scaler
         if scaler is not None and not do_finetune:
             pretrained_dict = checkpoint['scaler']
             msg = scaler.load_state_dict(pretrained_dict)
-            logger.info(f'loaded scaler from epoch {epoch} with msg: {msg}')
+            logger.info(f'loaded scaler from epoch {epoch + 1} with msg: {msg}')
 
         logger.info(f'read-path: {r_path}')
         del checkpoint
@@ -105,24 +107,24 @@ def load_decoder_checkpoint(
         # -- loading encoder
         pretrained_dict = convert_ddp(checkpoint['encoder'], world_size == 1)
         msg = encoder.load_state_dict(pretrained_dict)
-        logger.info(f'loaded pretrained encoder from epoch {epoch} with msg: {msg}')
+        logger.info(f'loaded pretrained encoder from epoch {epoch + 1} with msg: {msg}')
 
         # -- loading decoder
         pretrained_dict = convert_ddp(checkpoint['decoder'], world_size == 1)
         msg = decoder.load_state_dict(pretrained_dict)
-        logger.info(f'loaded pretrained decoder from epoch {epoch} with msg: {msg}')
+        logger.info(f'loaded pretrained decoder from epoch {epoch + 1} with msg: {msg}')
 
         # -- loading optimizer
         if opt is not None and not do_finetune:
             pretrained_dict = checkpoint['opt']
             msg = opt.load_state_dict(pretrained_dict)
-            logger.info(f'loaded optimizer from epoch {epoch} with msg: {msg}')
+            logger.info(f'loaded optimizer from epoch {epoch + 1} with msg: {msg}')
 
         # -- loading scaler
         if scaler is not None and not do_finetune:
             pretrained_dict = checkpoint['scaler']
             msg = scaler.load_state_dict(pretrained_dict)
-            logger.info(f'loaded scaler from epoch {epoch} with msg: {msg}')
+            logger.info(f'loaded scaler from epoch {epoch + 1} with msg: {msg}')
 
         logger.info(f'read-path: {r_path}')
         del checkpoint

@@ -24,14 +24,13 @@ keypoint:
   - 0.05
   - 1.0
   - 1.0
-  - 1.0
 meta:
   load_checkpoint: true
   model_name: vit_huge
-  decoder_type: simple
-  read_checkpoint: model/jepa-ep360.pth.tar
-  checkpoint_epoch: 0
-  do_finetune: false
+  decoder_type: classic
+  read_checkpoint: keypoint-classic-latest.pth.tar
+  checkpoint_epoch: 50
+  do_finetune: true
   use_bfloat16: true
 optimization:
   epochs: 70
