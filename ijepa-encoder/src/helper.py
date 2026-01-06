@@ -27,10 +27,10 @@ def convert_ddp(checkpoint_dict, do_convert):
     if not do_convert:
         return checkpoint_dict
 
-    # remove 'module:' tag
+    # remove 'module.' tag (originating from DataDistributedParallel)
     checkpoint_cpy = OrderedDict()
     for k, v in checkpoint_dict.items():
-        name = k[len('module:'):] if k.startswith('module:') else k
+        name = k[len('module.'):] if k.startswith('module.') else k
         checkpoint_cpy[name] = v
 
     return checkpoint_cpy
