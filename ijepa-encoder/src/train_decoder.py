@@ -299,7 +299,6 @@ def main(args, resume_preempt=False):
             if rank == 0:
                 torch.save(save_dict, latest_path)
                 if best:
-                    logger.info(f'Updating best model.')
                     torch.save(save_dict, best_path)
                 if (epoch + 1) % checkpoint_freq == 0:
                     torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
@@ -313,14 +312,14 @@ def main(args, resume_preempt=False):
             gt_reg = [gt.to(device, non_blocking=True) for gt in gt_reg]
             return (imgs, grids, gt_orgs, gt_cls, gt_reg)
 
-        def log_stats(itr, loss, etime, train):
+        def log_stats(itr, loss, lr, wd, etime, train):
             csv_logger.log(epoch + 1, itr, loss, etime)
             mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
                    else torch.cuda.max_memory_allocated()) / 1024.**2
             if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
                 logger.info('%s: [%d, %5d] loss: %.3f '
                             '[%.3f + %.3f + %.3f + %.3f + %.3f] '
-                            '[mem: %.2e] '
+                            '[mem: %.2e, lr: %.4f, wd: %.4f] '
                             '(%.1f ms)'
                             % ('Train' if train else 'Val', epoch + 1, itr,
                                 loss_train_m.avg if train else loss_val_m.avg,
@@ -329,9 +328,10 @@ def main(args, resume_preempt=False):
                                 reg_loss_train_m.avg if train else reg_loss_val_m.avg,
                                 pts_loss_train_m.avg if train else pts_loss_val_m.avg,
                                 alg_loss_train_m.avg if train else alg_loss_val_m.avg,
-                                mem, time_meter.avg))
+                                mem, lr, wd,
+                                time_meter.avg))
 
-        def log_wandb(train):
+        def log_wandb(lr, wd, train):
             mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
                    else torch.cuda.max_memory_allocated()) / 1024.**2
             run.log({
@@ -342,14 +342,15 @@ def main(args, resume_preempt=False):
                 f'loss-{"train" if train else "val"}/regression': reg_loss_train_m.avg if train else reg_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/points': pts_loss_train_m.avg if train else pts_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/align': alg_loss_train_m.avg if train else alg_loss_val_m.avg,
-                'gpu-mem': mem
+                'gpu-mem': mem,
+                'lr': lr,
+                'wd': wd
             })
 
         def step(imgs, grids, gt_orgs, gt_cls, gt_reg):
             # Update learning rate
-            if decoder.training:
-                scheduler.step()
-                wd_scheduler.step()
+            lr = scheduler.step() if decoder.training else 0.
+            wd = wd_scheduler.step() if decoder.training else 0.
 
             def forward():
                 # Charts -> Embeddings
@@ -441,7 +442,7 @@ def main(args, resume_preempt=False):
                     optimizer.step()
                 optimizer.zero_grad()
 
-            return all_losses
+            return (all_losses, lr, wd)
 
         def update_meters(losses, train):
             loss, l_org, l_cls, l_reg, l_pts, l_alg = losses
@@ -456,7 +457,7 @@ def main(args, resume_preempt=False):
         def iteration_wrapper(itr, data, targets, train):
             imgs, grids, gt_orgs, gt_cls, gt_reg = load_charts(data, targets)
 
-            losses, etime = gpu_timer(
+            (losses, lr, wd), etime = gpu_timer(
                 step,
                 imgs=imgs,
                 grids=grids,
@@ -468,8 +469,10 @@ def main(args, resume_preempt=False):
             loss = update_meters(losses, train)
             time_meter.update(etime)
 
-            log_stats(itr, loss, etime, train)
-            log_wandb(train)
+            log_stats(itr, loss, lr, wd, etime, train)
+            log_wandb(lr, wd, train)
+
+            logger.info(f'{torch.cuda.memory_summary()}')
 
         # Train loop
         decoder.train()
