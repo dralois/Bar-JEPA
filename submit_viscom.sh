@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Setup training command
-COMMAND="whereis python && python ./ijepa-encoder/main.py --mode decoder --fname ./ijepa-encoder/configs/keypoint_vith14_classic_noarp.yaml --devices cuda:0"
+COMMAND="whereis python && python ./ijepa-encoder/main.py --mode decoder --fname ./ijepa-encoder/configs/keypoint/classic_arp.yaml --devices cuda:0"
 
 # Submit the job to the cluster
 submit "$COMMAND" \

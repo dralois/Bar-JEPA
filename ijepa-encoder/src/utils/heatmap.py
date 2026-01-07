@@ -26,8 +26,8 @@ def cls_pts_to_map(
     for cls_id, cls_list in enumerate(cls_pts_lists):
         for point in cls_list:
             # Compute map coordinates and regression values
-            pos = torch.floor(point.flip(-1) * mapsize).type(torch.int32)
-            reg = (point.flip(-1) * mapsize) - pos - 0.5
+            pos = torch.floor(point * mapsize).type(torch.int32)
+            reg = (point * mapsize) - pos - 0.5
 
             # Store in maps
             cls_map[pos[0], pos[1]] = cls_id + 1
@@ -127,8 +127,8 @@ def p_maps_to_cls_lists(
         conf = torch.sigmoid(p_cls[2, point[0], point[1]])
         ticks.append((pos, conf))
 
-    # Select highest confidence candidate from origin heatmap
-    org_idx = torch.argmax(torch.sigmoid(p_cls[3]))
+    # Select highest confidence candidate from background-masked origin heatmap
+    org_idx = torch.argmax(torch.sigmoid(p_cls[3]) * pts_mask)
     org_point = torch.stack(torch.unravel_index(org_idx, p_cls[3].shape))
     org_pos = (org_point * 2 + 1) / (size * 2)
     # Offset pixel midpoint by regression value

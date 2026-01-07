@@ -30,7 +30,7 @@ meta:
   load_checkpoint: true
   model_name: vit_huge
   decoder_type: classic
-  read_checkpoint: model/keypoint-classic-arp-ep25.pth.tar
+  read_checkpoint: keypoint-classic-arp-ep25.pth.tar
   do_finetune: false
   finetune_epoch: 0
   use_bfloat16: true

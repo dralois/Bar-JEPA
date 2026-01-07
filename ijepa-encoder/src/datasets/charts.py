@@ -152,18 +152,18 @@ class Charts(torchvision.datasets.DatasetFolder):
 
         # Coordinate system origin is normalized
         size = torch.tensor([float(v) for v in ann['chart_metadata']['size']['bbox'][2:]])
-        gt_org = torch.tensor([float(v) for v in ann['chart_metadata']['origin']['bbox'][:2]]) / size
+        gt_org = (torch.tensor([float(v) for v in ann['chart_metadata']['origin']['bbox'][:2]]) / size).flip(-1)
 
         ticks = []
         # Ticks are normalized x,y coordinates of the tick location
         for tick in ann['data']['value_axis']['ticks']:
-            ticks.append(torch.tensor([float(v) for v in tick['bbox'][:2]]) / size)
+            ticks.append((torch.tensor([float(v) for v in tick['bbox'][:2]]) / size).flip(-1))
 
         bars = []
         # Bars are normalized x,y coordinates of a bar's top left corner
         for feature in ann['data']['features']:
             for bar in feature['data']:
-                bars.append(torch.tensor([float(v) for v in bar['bbox'][:2]]) / size)
+                bars.append((torch.tensor([float(v) for v in bar['bbox'][:2]]) / size).flip(-1))
 
         # Map size depends on image size
         mapsize = (torch.tensor(img.shape[1:3]) // self.patch_size) * 4
