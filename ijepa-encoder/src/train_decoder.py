@@ -30,9 +30,13 @@ from src.utils.distributed import (
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
+    gt_maps_to_cls_lists_v2,
     p_maps_to_cls_lists,
+    p_maps_to_cls_lists_v2,
     nms,
+    nms_v2,
     evaluate_gt_p_match,
+    evaluate_gt_p_match_v2,
     f1
 )
 
@@ -384,24 +388,32 @@ def main(args, resume_preempt=False):
                     # Radius for nms and l_pts is based on max(H, W)
                     radius_thresh = eval_thresh / sizes[i].max()
                     # Convert maps to lists of bars & ticks + origin
-                    gt_bars, gt_ticks = gt_maps_to_cls_lists(gt_cls[i], gt_reg[i], sizes[i])
-                    p_bars, p_ticks, p_org = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
+                    # gt_bars, gt_ticks = gt_maps_to_cls_lists(gt_cls[i], gt_reg[i], sizes[i])
+                    gt_bars2, gt_ticks2 = gt_maps_to_cls_lists_v2(gt_cls[i], gt_reg[i], sizes[i])
+                    # p_bars, p_ticks, p_org = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
+                    p_bars2, p_ticks2, p_org2 = p_maps_to_cls_lists_v2(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
                     # Filter predictions using nms
-                    p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
+                    # p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
+                    p_bars2, p_ticks2 = nms_v2(p_bars2, p_ticks2, radius_thresh)
 
                     # Origin loss
-                    l_org += F.smooth_l1_loss(p_org, gt_orgs[i])
+                    l_org += F.smooth_l1_loss(p_org2, gt_orgs[i])
 
                     # Within class point loss
-                    l_pts += evaluate_gt_p_match(
-                        gt_bars, gt_ticks,
-                        p_bars, p_ticks,
+                    # l_pts += evaluate_gt_p_match(
+                    #     gt_bars, gt_ticks,
+                    #     p_bars, p_ticks,
+                    #     radius_thresh) # type: ignore
+                    l_pts += evaluate_gt_p_match_v2(
+                        gt_bars2, gt_ticks2,
+                        p_bars2, p_ticks2,
                         radius_thresh) # type: ignore
 
                     # Chart specific loss: Aligns tick x coordinates
-                    if len(p_ticks) > 0:
-                        # Uses highest confidence origin point for loss
-                        l_align += (torch.stack(p_ticks)[:,1] - p_org[1]).abs().sum()
+                    l_align += (p_ticks2 - p_org2).abs()[:,1].sum()
+                    # if len(p_ticks2) > 0:
+                    #     # Uses highest confidence origin point for loss
+                    #     l_align += (torch.stack(p_ticks2)[:,1] - p_org2[1]).abs().sum()
 
                 # Weight losses according to scaling factors
                 l_pts /= 10.
@@ -421,6 +433,7 @@ def main(args, resume_preempt=False):
                     l_pts.item(),
                     l_align.item()
                 )
+
 
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):

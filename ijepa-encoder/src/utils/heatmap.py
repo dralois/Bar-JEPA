@@ -76,6 +76,37 @@ def gt_maps_to_cls_lists(
     return bars, ticks
 
 
+def gt_maps_to_cls_lists_v2(
+    gt_cls: torch.Tensor,  # Shape: [H, W]
+    gt_reg: torch.Tensor,  # Shape: [2, H, W]
+    size: torch.Tensor     # Shape: [2]
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Converts ground truth class and regression maps to tensors of bar and tick positions.
+    Returns tensors of shape [N, 2] and [M, 2] for bars and ticks, respectively.
+    """
+    # Get all non-background points
+    points = torch.nonzero(gt_cls > 0)
+
+    # Pixel midpoints in image space
+    pos = (points * 2 + 1) / (size * 2)
+    # Apply regression offsets
+    pos += gt_reg[:, points[:, 0], points[:, 1]].T / size
+
+    # Class labels for each point
+    cls = gt_cls[points[:, 0], points[:, 1]]
+
+    # Mask for bars and ticks
+    bar_mask = cls == 1
+    tick_mask = cls == 2
+
+    # Extract bars and ticks
+    bars = pos[bar_mask]
+    ticks = pos[tick_mask]
+
+    return bars, ticks
+
+
 def p_maps_to_cls_lists(
     p_cls: torch.Tensor,
     p_reg: torch.Tensor,
@@ -137,6 +168,54 @@ def p_maps_to_cls_lists(
     return bars, ticks, org_pos
 
 
+def p_maps_to_cls_lists_v2(
+    p_cls: torch.Tensor,
+    p_reg: torch.Tensor,
+    size: torch.Tensor,
+    bg_conf_thresh: float,
+    cls_conf_thresh: float
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Extracts and processes predicted bars, ticks & origin from classification and regression maps.
+    Returns tensors instead of lists for bars, ticks, and origin.
+    """
+    # Precompute sigmoid once
+    p_cls_sig = torch.sigmoid(p_cls)
+
+    # Background mask
+    pts_mask = p_cls_sig[0] < bg_conf_thresh
+
+    def extract_points(cls_map: torch.Tensor) -> torch.Tensor:
+        # Confidence mask
+        cls_conf = cls_map * pts_mask
+        mask = cls_conf > cls_conf_thresh
+
+        # Get coordinates and confidences
+        points = torch.nonzero(mask)
+        if points.numel() == 0:
+            return torch.empty((0, 3), device=p_cls.device)  # [y, x, conf]
+
+        # Pixel midpoint in image space
+        pos = ((points * 2 + 1) / (size * 2)).to(cls_map.dtype)
+
+        # Apply regression offsets
+        pos += p_reg[:, points[:, 0], points[:, 1]].T / size
+        conf = cls_map[points[:, 0], points[:, 1]]
+        return torch.cat([pos, conf.unsqueeze(1)], dim=1)
+
+    # Extract bars and ticks
+    bars = extract_points(p_cls_sig[1])
+    ticks = extract_points(p_cls_sig[2])
+
+    # Origin: highest confidence point
+    org_conf = p_cls_sig[3] * pts_mask
+    org_idx = torch.argmax(org_conf)
+    org_point = torch.tensor(torch.unravel_index(org_idx, p_cls[3].shape), device=p_cls.device)
+    org_pos = (org_point * 2 + 1) / (size * 2) + p_reg[:, org_point[0], org_point[1]] / size
+
+    return bars, ticks, org_pos
+
+
 def nms(
     p_bars: List[Tuple[torch.Tensor, torch.Tensor]],
     p_ticks: List[Tuple[torch.Tensor, torch.Tensor]],
@@ -187,6 +266,56 @@ def nms(
             # Update checked points and maximum points
             checked_tick_pts.extend(neighbor_idx)
             nms_ticks.append(pt)
+
+    return nms_bars, nms_ticks
+
+
+def nms_v2(
+    p_bars: torch.Tensor,  # Shape: [N, 3] (x, y, conf)
+    p_ticks: torch.Tensor,  # Shape: [M, 3] (x, y, conf)
+    radius_thresh: float
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Performs non-maximum suppression on predicted bars and ticks.
+    Returns tensors of suppressed coordinates (without confidence) for bars and ticks.
+    """
+    def suppress_points(points: torch.Tensor, anisotropic: bool = False) -> torch.Tensor:
+        if points.numel() == 0:
+            return points[:, :2]  # Return empty tensor with correct shape
+
+        # Sort by confidence (descending)
+        points = points.detach()
+        sorted_indices = points[:, 2].argsort(descending=True)
+        points = points[sorted_indices]
+
+        # Coordinates
+        coords = points[:, :2]
+
+        # Pairwise distances
+        dx = torch.abs(coords[:, 0].unsqueeze(1) - coords[:, 0].unsqueeze(0))
+        dy = torch.abs(coords[:, 1].unsqueeze(1) - coords[:, 1].unsqueeze(0))
+
+        if anisotropic:
+            distances = dx / 5. + dy
+        else:
+            distances = dx + dy
+
+        # NMS logic
+        keep = torch.ones(points.shape[0], device=points.device).bool()
+        for i in range(points.shape[0]):
+            if keep[i]:
+                # Suppress neighbors within radius
+                neighbors = distances[i] < radius_thresh
+                neighbors[i] = False  # Keep current point
+                keep[neighbors] = False
+
+        return coords[keep]
+
+    # Suppress bars (anisotropic) and return coordinates only
+    nms_bars = suppress_points(p_bars, anisotropic=True)
+
+    # Suppress ticks (isotropic) and return coordinates only
+    nms_ticks = suppress_points(p_ticks, anisotropic=False)
 
     return nms_bars, nms_ticks
 
@@ -255,6 +384,46 @@ def evaluate_gt_p_match(
         return bar_precision, bar_recall, tick_precision, tick_recall
     else:
         # If training, return total distance error
+        return min_bar_dists + min_tick_dists
+
+
+def evaluate_gt_p_match_v2(
+    gt_bars: torch.Tensor,   # Shape: [N, 2]
+    gt_ticks: torch.Tensor,  # Shape: [M, 2]
+    p_bars: torch.Tensor,    # Shape: [K, 2]
+    p_ticks: torch.Tensor,   # Shape: [L, 2]
+    dist_thresh: float,
+    eval: bool = False
+) -> torch.Tensor | Tuple[float, float, float, float]:
+    """
+    Evaluate predicted bars and ticks against ground truth.
+    Inputs are tensors of coordinates.
+    """
+    def closest_match(gt_elems: torch.Tensor, p_elems: torch.Tensor) -> Tuple[int, torch.Tensor]:
+        if p_elems.numel() == 0:
+            return 0, torch.tensor(0., device=gt_elems.device)
+
+        # Pairwise distance using broadcasting: [n_gt, n_p, 2] -> [n_gt, n_p]
+        diff = gt_elems.unsqueeze(1) - p_elems.unsqueeze(0)
+        distances = (diff ** 2).sum(dim=2).sqrt()
+        matches = distances < dist_thresh  # bool
+
+        # Min distances per gt, inf for non-matches
+        min_dists = distances.min(dim=1).values
+        min_dists = torch.where(matches.any(dim=1), min_dists, torch.zeros_like(min_dists))
+
+        return matches.sum().item(), min_dists.sum()
+
+    bar_matches, min_bar_dists = closest_match(gt_bars, p_bars)
+    tick_matches, min_tick_dists = closest_match(gt_ticks, p_ticks)
+
+    if eval:
+        bar_precision = bar_matches / max(len(p_bars), 1)
+        bar_recall = bar_matches / max(len(gt_bars), 1)
+        tick_precision = tick_matches / max(len(p_ticks), 1)
+        tick_recall = tick_matches / max(len(gt_ticks), 1)
+        return bar_precision, bar_recall, tick_precision, tick_recall
+    else:
         return min_bar_dists + min_tick_dists
 
 
