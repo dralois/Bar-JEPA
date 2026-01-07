@@ -1,4 +1,5 @@
 import os
+import time
 
 # -- FOR DISTRIBUTED TRAINING ENSURE ONLY 1 DEVICE VISIBLE PER PROCESS
 try:
@@ -424,8 +425,14 @@ def main(args, resume_preempt=False):
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                 if decoder.training:
+                    forward_start = time.time()
                     p_cls, p_reg = forward()
+                    forward_end = time.time()
+                    loss_fn_start = time.time()
                     loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
+                    loss_fn_end = time.time()
+                    logger.info(f'Forward time: {forward_end - forward_start:.4f}s')
+                    logger.info(f'Loss function time: {loss_fn_end - loss_fn_start:.4f}s')
                 else:
                     with torch.no_grad():
                         p_cls, p_reg = forward()
@@ -434,9 +441,15 @@ def main(args, resume_preempt=False):
             # Backward & step
             if decoder.training:
                 if use_bfloat16:
+                    backward_start = time.time()
                     scaler.scale(loss).backward()
+                    backward_end = time.time()
+                    step_start = time.time()
                     scaler.step(optimizer)
                     scaler.update()
+                    step_end = time.time()
+                    logger.info(f'Backward time: {backward_end - backward_start:.4f}s')
+                    logger.info(f'Step time: {step_end - step_start:.4f}s')
                 else:
                     loss.backward()
                     optimizer.step()
