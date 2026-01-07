@@ -485,8 +485,6 @@ def main(args, resume_preempt=False):
             log_stats(itr, loss, lr, wd, etime, train)
             log_wandb(lr, wd, train)
 
-            logger.info(f'{torch.cuda.memory_summary()}')
-
         # Train loop
         decoder.train()
         for itr, (data, targets) in enumerate(train_loader):
