@@ -1,20 +1,20 @@
 data:
-  batch_size: 2
+  batch_size: 2048
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
   - 1.0
   crop_size: 224
   patch_size: 14
-  num_workers: 1
-  pin_mem: false
+  num_workers: 12
+  pin_mem: true
   root_path: ./data
   image_folder: images
   annotation_folder: annotations
-  preserve_aspect_ratio: true
+  preserve_aspect_ratio: false
 logging:
   folder: ./output
-  write_tag: keypoint
+  write_tag: keypoint-classic-noarp
 keypoint:
   max_keypoints: 64
   pnt_detect_thresh: 0.9
@@ -25,17 +25,17 @@ keypoint:
   - 1.0
   - 1.0
   use_pts_loss: true
-  use_align_loss: true
+  use_align_loss: false
 meta:
   load_checkpoint: true
   model_name: vit_huge
   decoder_type: classic
-  read_checkpoint: keypoint-latest.pth.tar
+  read_checkpoint: model/keypoint-classic-noarp-ep25.pth.tar
   do_finetune: false
-  finetune_epoch: 50
+  finetune_epoch: 0
   use_bfloat16: true
 optimization:
-  epochs: 70
+  epochs: 50
   final_lr: 1.0e-06
   final_weight_decay: 0.4
   ipe_scale: 1.0

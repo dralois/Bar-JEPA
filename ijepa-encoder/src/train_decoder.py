@@ -54,7 +54,7 @@ from src.transforms import make_transforms
 # --
 log_timings = True
 log_freq = 5
-checkpoint_freq = 25
+checkpoint_freq = 10
 # --
 
 _GLOBAL_SEED = 0
@@ -119,7 +119,7 @@ def main(args, resume_preempt=False):
     with open(dump, 'w') as f:
         yaml.dump(args, f)
 
-    logger.info(f"Python version: {sys.version}, PyTorch version: {torch.__version__}")
+    logger.info(f'Python version: {sys.version}, PyTorch version: {torch.__version__}')
     # ----------------------------------------------------------------------- #
 
     # -- create device
@@ -143,7 +143,7 @@ def main(args, resume_preempt=False):
             )
         ) else (torch.float16 if use_bfloat16 else torch.float32)
     except Exception as e:
-        logger.warning(f'Error checking bfloat16 support: {e}. Falling back to float16')
+        logger.warning(f'Error checking bfloat16 support: {e}. Falling back to float16.')
         autocast_dtype = torch.float16 if use_bfloat16 else torch.float32
 
     # -- dataloader
@@ -299,6 +299,7 @@ def main(args, resume_preempt=False):
             if rank == 0:
                 torch.save(save_dict, latest_path)
                 if best:
+                    logger.info(f'Updating best model.')
                     torch.save(save_dict, best_path)
                 if (epoch + 1) % checkpoint_freq == 0:
                     torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
