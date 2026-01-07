@@ -208,12 +208,27 @@ def p_maps_to_cls_lists_v2(
     ticks = extract_points(p_cls_sig[2])
 
     # Origin: highest confidence point
-    org_conf = p_cls_sig[3] * pts_mask
-    org_idx = torch.argmax(org_conf)
-    org_point = torch.tensor(torch.unravel_index(org_idx, p_cls[3].shape), device=p_cls.device)
-    org_pos = (org_point * 2 + 1) / (size * 2) + p_reg[:, org_point[0], org_point[1]] / size
+    org_logits = torch.where(pts_mask, p_cls[3], torch.full_like(p_cls[3], -float('inf')))
 
-    return bars, ticks, org_pos
+    # Flatten and compute softmax probabilities
+    org_prob = torch.softmax(org_logits.view(-1), dim=0)  # [H*W]
+
+    H, W = p_cls.shape[1], p_cls.shape[2]
+    # Build normalized grid coordinates [y, x]
+    ys, xs = torch.meshgrid(torch.arange(H, device=p_cls.device),
+                            torch.arange(W, device=p_cls.device),
+                            indexing="ij")
+    xs = (xs.float() * 2 + 1) / (2 * W)
+    ys = (ys.float() * 2 + 1) / (2 * H)
+    coords = torch.stack([ys, xs], dim=-1).view(-1, 2)  # [H*W, 2]
+
+    # Add regression offsets
+    reg_offsets = p_reg.permute(1, 2, 0).reshape(-1, 2) / size.float()
+    coords += reg_offsets
+
+    # Soft origin: expected coordinate
+    p_org = (org_prob[:, None] * coords).sum(dim=0)
+    return bars, ticks, p_org
 
 
 def nms(

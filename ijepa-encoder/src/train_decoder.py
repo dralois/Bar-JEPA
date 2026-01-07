@@ -434,7 +434,6 @@ def main(args, resume_preempt=False):
                     l_align.item()
                 )
 
-
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                 if decoder.training:
