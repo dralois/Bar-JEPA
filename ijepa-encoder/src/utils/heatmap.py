@@ -40,7 +40,7 @@ def gt_maps_to_cls_lists(
     gt_cls: torch.Tensor,
     gt_reg: torch.Tensor,
     size: torch.Tensor
-) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Converts ground truth class and regression maps
     to lists of bar and tick positions.
@@ -50,40 +50,8 @@ def gt_maps_to_cls_lists(
     :param size: size of the map, shape [2]
     :return: Tuple containing:
 
-        - list of bars, [y, x] in image space
-        - list of ticks, [y, x] in image space
-    """
-    bars = []
-    ticks = []
-
-    for point in torch.nonzero(gt_cls):
-        # Pixel midpoint in image space
-        pos = (point * 2 + 1) / (size * 2)
-        # Offset pixel midpoint by regression value
-        pos += gt_reg[:, point[0], point[1]] / size
-
-        # Add to corresponding class's list
-        match gt_cls[point[0], point[1]]:
-            case 0: # Background
-                pass
-            case 1: # Bar
-                bars.append(pos)
-            case 2: # Tick
-                ticks.append(pos)
-            case _:
-                raise ValueError(f"Unknown class {gt_cls[point[0], point[1]]}")
-
-    return bars, ticks
-
-
-def gt_maps_to_cls_lists_v2(
-    gt_cls: torch.Tensor,  # Shape: [H, W]
-    gt_reg: torch.Tensor,  # Shape: [2, H, W]
-    size: torch.Tensor     # Shape: [2]
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Converts ground truth class and regression maps to tensors of bar and tick positions.
-    Returns tensors of shape [N, 2] and [M, 2] for bars and ticks, respectively.
+        - bars, [N, 2] -> [y, x] in image space
+        - ticks, [M, 2] -> [y, x] in image space
     """
     # Get all non-background points
     points = torch.nonzero(gt_cls > 0)
@@ -96,7 +64,7 @@ def gt_maps_to_cls_lists_v2(
     # Class labels for each point
     cls = gt_cls[points[:, 0], points[:, 1]]
 
-    # Mask for bars and ticks
+    # Split into bars and ticks
     bars  = pos[cls == 1]
     ticks = pos[cls == 2]
 
