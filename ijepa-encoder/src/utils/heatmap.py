@@ -97,12 +97,8 @@ def gt_maps_to_cls_lists_v2(
     cls = gt_cls[points[:, 0], points[:, 1]]
 
     # Mask for bars and ticks
-    bar_mask = cls == 1
-    tick_mask = cls == 2
-
-    # Extract bars and ticks
-    bars = pos[bar_mask]
-    ticks = pos[tick_mask]
+    bars  = pos[cls == 1]
+    ticks = pos[cls == 2]
 
     return bars, ticks
 

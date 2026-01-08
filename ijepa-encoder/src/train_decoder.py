@@ -287,9 +287,9 @@ def main(args, resume_preempt=False):
         reg_loss_train_m, reg_loss_val_m = AverageMeter(), AverageMeter()
         pts_loss_train_m, pts_loss_val_m = AverageMeter(), AverageMeter()
         alg_loss_train_m, alg_loss_val_m = AverageMeter(), AverageMeter()
-        time_meter = AverageMeter()
+        time_meter, loss_time = AverageMeter(), AverageMeter()
 
-        def save_checkpoint(best = False):
+        def save_checkpoint(best, lr, wd):
             save_dict = {
                 'encoder': encoder.state_dict(),
                 'decoder': decoder.state_dict(),
@@ -299,7 +299,8 @@ def main(args, resume_preempt=False):
                 'loss': loss_val_m.avg,
                 'batch_size': batch_size,
                 'world_size': world_size,
-                'lr': lr
+                'lr': lr,
+                'wd': wd
             }
             if rank == 0:
                 torch.save(save_dict, latest_path)
@@ -324,8 +325,8 @@ def main(args, resume_preempt=False):
             if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
                 logger.info('%s: [%d, %5d] loss: %.3f '
                             '[%.3f + %.3f + %.3f + %.3f + %.3f] '
-                            '[mem: %.2e, lr: %.4f, wd: %.4f] '
-                            '(%.1f ms)'
+                            '[mem: %.2e, lr: %.2e, wd: %.2e] '
+                            '(%.1f | %.1f ms)'
                             % ('Train' if train else 'Val', epoch + 1, itr,
                                 loss_train_m.avg if train else loss_val_m.avg,
                                 org_loss_train_m.avg if train else org_loss_val_m.avg,
@@ -334,13 +335,14 @@ def main(args, resume_preempt=False):
                                 pts_loss_train_m.avg if train else pts_loss_val_m.avg,
                                 alg_loss_train_m.avg if train else alg_loss_val_m.avg,
                                 mem, lr, wd,
-                                time_meter.avg))
+                                time_meter.avg, loss_time.avg))
 
         def log_wandb(lr, wd, train):
             mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
                    else torch.cuda.max_memory_allocated()) / 1024.**2
             run.log({
                 'epoch': epoch + 1,
+                'time': time.time(),
                 f'loss-{"train" if train else "val"}/total': loss_train_m.avg if train else loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/origin': org_loss_train_m.avg if train else org_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/classification': cls_loss_train_m.avg if train else cls_loss_val_m.avg,
@@ -364,7 +366,7 @@ def main(args, resume_preempt=False):
                 p_cls, p_reg = decoder(h, grids)
                 return p_cls, p_reg
 
-            def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg):
+            def loss(gt_orgs, p_cls, gt_cls, p_reg, gt_reg):
                 l_org = torch.tensor(0., device=device)
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
@@ -397,7 +399,7 @@ def main(args, resume_preempt=False):
                     p_bars2, p_ticks2 = nms_v2(p_bars2, p_ticks2, radius_thresh)
 
                     # Origin loss
-                    l_org += F.smooth_l1_loss(p_org2, gt_orgs[i])
+                    l_org += F.l1_loss(p_org2, gt_orgs[i])
 
                     # Within class point loss
                     # l_pts += evaluate_gt_p_match(
@@ -437,31 +439,22 @@ def main(args, resume_preempt=False):
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                 if decoder.training:
-                    forward_start = time.time()
                     p_cls, p_reg = forward()
-                    forward_end = time.time()
-                    loss_fn_start = time.time()
-                    loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
-                    loss_fn_end = time.time()
-                    logger.info(f'Forward time: {forward_end - forward_start:.4f}s')
-                    logger.info(f'Loss function time: {loss_fn_end - loss_fn_start:.4f}s')
+                    loss_start = time.time()
+                    loss, all_losses = loss(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
+                    loss_end = time.time()
+                    loss_time.update(loss_end-loss_start)
                 else:
                     with torch.no_grad():
                         p_cls, p_reg = forward()
-                        loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
+                        loss, all_losses = loss(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
 
             # Backward & step
             if decoder.training:
                 if use_bfloat16:
-                    backward_start = time.time()
                     scaler.scale(loss).backward()
-                    backward_end = time.time()
-                    step_start = time.time()
                     scaler.step(optimizer)
                     scaler.update()
-                    step_end = time.time()
-                    logger.info(f'Backward time: {backward_end - backward_start:.4f}s')
-                    logger.info(f'Step time: {step_end - step_start:.4f}s')
                 else:
                     loss.backward()
                     optimizer.step()
@@ -497,10 +490,13 @@ def main(args, resume_preempt=False):
             log_stats(itr, loss, lr, wd, etime, train)
             log_wandb(lr, wd, train)
 
+            return lr, wd
+
         # Train loop
         decoder.train()
+        last_lr, last_wd = 0., 0.
         for itr, (data, targets) in enumerate(train_loader):
-            iteration_wrapper(itr, data, targets, True)
+            last_lr, last_wd = iteration_wrapper(itr, data, targets, True)
 
         # Validation loop
         decoder.eval()
@@ -508,7 +504,7 @@ def main(args, resume_preempt=False):
             iteration_wrapper(itr, data, targets, False)
 
         # -- Save Checkpoint after every epoch
-        save_checkpoint(loss_val_m.avg < best_val_loss)
+        save_checkpoint(loss_val_m.avg < best_val_loss, last_lr, last_wd)
         best_val_loss = min(loss_val_m.avg, best_val_loss)
 
     run.finish()
