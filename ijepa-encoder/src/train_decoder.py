@@ -503,7 +503,10 @@ def main(args, resume_preempt=False):
         # Train loop
         decoder.train()
         last_lr, last_wd = 0., 0.
+        load_start = time.time()
         for itr, (data, targets) in enumerate(train_loader):
+            logger.info('Loading time: {:.2f}s'.format(time.time() - load_start))
+            load_start = time.time()
             last_lr, last_wd = iteration_wrapper(itr, data, targets, True)
 
         # Validation loop
