@@ -56,11 +56,12 @@ def make_charts(
         sampler = torch.utils.data.distributed.DistributedSampler(
             dataset,
             num_replicas=world_size,
-            rank=rank)
+            rank=rank,
+            shuffle=shuffle,
+            drop_last=drop_last)
         loader = torch.utils.data.DataLoader(
             dataset,
             collate_fn=collator,
-            shuffle=shuffle,
             sampler=sampler,
             batch_size=batch_size,
             drop_last=drop_last,
