@@ -60,7 +60,7 @@ def make_charts(
         loader = torch.utils.data.DataLoader(
             dataset,
             collate_fn=collator,
-            shuffle=shuffle
+            shuffle=shuffle,
             sampler=sampler,
             batch_size=batch_size,
             drop_last=drop_last,
