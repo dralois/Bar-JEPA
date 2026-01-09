@@ -371,11 +371,15 @@ def main(args, resume_preempt=False):
 
                 # For each chart in batch individually
                 for i in range(len(p_cls)):
-                    # Weighted classification loss (origin is excluded)
+                    # Weighted classification loss (origin is separate)
                     l_cls += F.cross_entropy(
                         p_cls[i][:3].unsqueeze(0),
                         gt_cls[i].unsqueeze(0),
                         weight=cls_weights, reduction='mean')
+                    l_org += F.binary_cross_entropy_with_logits(
+                        p_cls[i][3],
+                        gt_orgs[i]
+                    )
 
                     # Regression loss only on non-background samples
                     gt_reg_masked = torch.masked_select(gt_reg[i], gt_cls[i].gt(0))
@@ -383,33 +387,36 @@ def main(args, resume_preempt=False):
                     l_reg += F.mse_loss(p_reg_masked, gt_reg_masked)
 
                     # Extract ground truth labels
-                    gt_bars, gt_ticks = gt_maps_to_cls_lists(
-                        gt_cls[i], gt_reg[i], sizes[i]
+                    gt_org, gt_bars, gt_ticks = gt_maps_to_cls_lists(
+                        gt_orgs[i], gt_cls[i], gt_reg[i], sizes[i]
                     )
 
                     # Keypoint coordinates & probabilities
                     kp_coords = p_kps[i][:, :2]
-                    kp_probs = torch.softmax(p_kps[i][:, 2:], dim=1)
+                    kp_probs = p_kps[i][:, 2:]
 
                     # Origin coordinate loss
                     origin_probs = kp_probs[:, 3]
                     origin_weights = origin_probs / (origin_probs.sum() + 1e-8)
                     p_org = (origin_weights[:, None] * kp_coords).sum(dim=0)
-                    l_org += F.l1_loss(p_org, gt_orgs[i])
+                    l_org += F.l1_loss(p_org, gt_org.squeeze(0))
 
-                    # Entropy regularization (encourages one-hot selection)
-                    l_org += -0.05 * (origin_probs * torch.log(origin_probs + 1e-8)).sum()
+                    # Entropy regularization (encourage one-hot selection)
+                    if origin_probs.sum() > 1e-3:
+                        l_org += 0.05 * (-(origin_weights * torch.log(origin_weights + 1e-8)).sum())
 
                     if use_pts_loss:
                         l_pts += keypoint_sets(
                             gt_bars,
                             kp_coords,
-                            kp_probs[:, 1],   # bar probability
+                            kp_probs,
+                            1, 0
                         )
                         l_pts += keypoint_sets(
                             gt_ticks,
                             kp_coords,
-                            kp_probs[:, 2],   # tick probability
+                            kp_probs,
+                            2, 0
                         )
 
                     if use_align_loss:
@@ -418,7 +425,6 @@ def main(args, resume_preempt=False):
                             tick_x = kp_coords[tick_mask, 1]
                             l_align += tick_x.var(unbiased=False) \
                                     + (tick_x.mean() - p_org[1]).abs()
-
 
                 loss: torch.Tensor = l_org + l_cls + l_reg
                 if use_pts_loss:

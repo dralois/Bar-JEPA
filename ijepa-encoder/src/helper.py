@@ -193,7 +193,7 @@ def init_decoder_model(
         max_patches=max_patches,
         in_channels=encoder.num_features,
         num_keypoints=max_keypoints,
-        num_classes=4,
+        num_classes=3,
         decoder_type=decoder_type)
 
     def init_weights(m):

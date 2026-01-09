@@ -17,7 +17,7 @@ import torchvision
 
 from torchvision.transforms import PILToTensor
 
-from src.utils.heatmap import cls_pts_to_map
+from src.utils.heatmap import cls_pts_to_maps
 
 _GLOBAL_SEED = 0
 logger = getLogger()
@@ -151,23 +151,23 @@ class Charts(torchvision.datasets.DatasetFolder):
         ann = json.load(open(ann_path))
 
         # Coordinate system origin is normalized
-        size = torch.tensor([float(v) for v in ann['chart_metadata']['size']['bbox'][2:]])
-        gt_org = (torch.tensor([float(v) for v in ann['chart_metadata']['origin']['bbox'][:2]]) / size).flip(-1)
+        size = torch.tensor(ann['chart_metadata']['size']['bbox'][2:])
+        org = (torch.tensor(ann['chart_metadata']['origin']['bbox'][:2]) / size).flip(-1)
 
         ticks = []
         # Ticks are normalized x,y coordinates of the tick location
         for tick in ann['data']['value_axis']['ticks']:
-            ticks.append((torch.tensor([float(v) for v in tick['bbox'][:2]]) / size).flip(-1))
+            ticks.append((torch.tensor(tick['bbox'][:2]) / size).flip(-1))
 
         bars = []
-        # Bars are normalized x,y coordinates of a bar's top left corner
+        # Bars are normalized x,y coordinates of a bar's top right corner
         for feature in ann['data']['features']:
             for bar in feature['data']:
-                bars.append((torch.tensor([float(v) for v in bar['bbox'][:2]]) / size).flip(-1))
+                bars.append((torch.tensor([bar['bbox'][2], bar['bbox'][1]]) / size).flip(-1))
 
         # Map size depends on image size
         mapsize = (torch.tensor(img.shape[1:3]) // self.patch_size) * 4
         # Generate class and regression maps
-        gt_cls, gt_reg = cls_pts_to_map([bars, ticks], mapsize)
+        gt_org, gt_cls, gt_reg = cls_pts_to_maps([bars, ticks], org, mapsize)
 
         return img, (gt_org, gt_cls, gt_reg)
