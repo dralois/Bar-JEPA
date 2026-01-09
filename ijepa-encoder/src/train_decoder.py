@@ -427,11 +427,12 @@ def main(args, resume_preempt=False):
                             l_align += tick_x.var(unbiased=False) \
                                     + (tick_x.mean() - p_org[1]).abs()
 
-                loss: torch.Tensor = l_org + l_cls + l_reg
-                if use_pts_loss:
-                    loss += l_pts
-                if use_align_loss:
-                    loss += l_align
+                # Apply scaling factors
+                l_org /= 5.
+                l_pts /= 10.
+                l_align /= 1000.
+
+                loss: torch.Tensor = l_org + l_cls + l_reg + l_pts + l_align
                 loss = AllReduce.apply(loss) # type: ignore
 
                 return loss, (
