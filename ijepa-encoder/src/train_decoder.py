@@ -52,7 +52,7 @@ from src.transforms import make_transforms
 
 # --
 log_timings = True
-log_freq = 5
+log_freq = 1
 checkpoint_freq = 10
 # --
 
