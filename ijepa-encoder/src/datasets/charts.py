@@ -37,7 +37,8 @@ def make_charts(
     annotation_folder=None,
     val_train_split=True,
     training=True,
-    drop_last=True
+    drop_last=True,
+    shuffle=False
 ):
     g = torch.Generator()
     g.manual_seed(_GLOBAL_SEED)
@@ -59,6 +60,7 @@ def make_charts(
         loader = torch.utils.data.DataLoader(
             dataset,
             collate_fn=collator,
+            shuffle=shuffle
             sampler=sampler,
             batch_size=batch_size,
             drop_last=drop_last,

@@ -209,7 +209,8 @@ def main(args, resume_preempt=False):
             annotation_folder=annotation_folder,
             val_train_split=True,
             training=True,
-            drop_last=True)
+            drop_last=False,
+            shuffle=True)
     ipe = len(train_loader)
 
     # -- init optimizer and scheduler
