@@ -1,3 +1,5 @@
+from typing import Tuple, List
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -113,26 +115,27 @@ class KeypointDetector(nn.Module):
         :param decoder_type: type of decoder ('simple' or 'classic').
         """
         super().__init__()
+
         self.max_patches = max_patches
-        self.h_w = int(max_patches ** 0.5)
         self.in_channels = in_channels
         self.num_keypoints = num_keypoints
+        self.num_classes = num_classes
         self.decoder_type = decoder_type
 
         # ViTPose-inspired decoders
         if decoder_type == 'simple':
-            self.decoder = SimpleDecoder(in_channels, num_keypoints)
+            self.decoder = SimpleDecoder(self.in_channels, self.num_keypoints)
         elif decoder_type == 'classic':
-            self.decoder = ClassicDecoder(in_channels, num_keypoints)
+            self.decoder = ClassicDecoder(self.in_channels, self.num_keypoints)
         else:
-            raise ValueError(f'Unknown decoder type {decoder_type}')
+            raise ValueError(f'Unknown decoder type {self.decoder_type}')
 
         self.fc_cls = nn.Sequential(
-            nn.Conv2d(num_keypoints, num_classes, 1, 1, 0)
+            nn.Conv2d(self.num_keypoints, self.num_classes, 1, 1, 0)
         ) # Predicts class probabilities
 
         self.fc_reg = nn.Sequential(
-            nn.Conv2d(num_keypoints, 2, 1, 1, 0),
+            nn.Conv2d(self.num_keypoints, 2, 1, 1, 0),
             nn.Tanh()
         ) # Predicts (dx, dy) offsets
 
@@ -154,7 +157,51 @@ class KeypointDetector(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, x, grids):
+    def _predict_keypoint(
+        self,
+        latent_preds: torch.Tensor,
+        cls_preds: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Directly predicts K keypoint coordinates and the
+        corresponding class logits from the latent space.
+
+        :param latent_preds: Latent space predictions, shape [K, H*4, W*4]
+        :param cls_preds: Class predictions, shape [ncls, H*4, W*4]
+        :return: Predicted keypoints, shape [K, 2 + ncls] (x, y, logits)
+        """
+        H, W = latent_preds.shape[1:]
+        # Create grids [H, W, 2]
+        ys, xs = torch.meshgrid(
+            torch.linspace(0, 1, H, device=latent_preds.device),
+            torch.linspace(0, 1, W, device=latent_preds.device),
+            indexing="ij",
+        )
+        # Coordinates grid in image space [H*W, 2]
+        coords = torch.stack([ys, xs], dim=-1).view(-1, 2)
+        latent_preds_flat = latent_preds.view(self.num_keypoints, -1)
+        cls_preds_flat = cls_preds.view(self.num_classes, -1).transpose(0, 1)
+
+        # Spatial softmax per slot -> [K, H*W]
+        weights = torch.softmax(latent_preds_flat, dim=1)
+
+        # Predict coordinates -> [K, 2]
+        keypoints_coords = weights @ coords
+
+        # Project dense class logits into slot space [H*W, C] -> [K, C]
+        keypoints_logits = weights @ cls_preds_flat
+
+        # Concatenate coordinates and class logits -> [K, 2 + C]
+        return torch.cat(
+            [keypoints_coords, keypoints_logits],
+            dim=1
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        grids: List[Tuple[int, int]]
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
         """
         Forward pass of the keypoint detector.
 
@@ -164,24 +211,30 @@ class KeypointDetector(nn.Module):
 
             - predicted class probabilities, shape: B x [ncls, H*4, W*4]
             - predicted (dy, dx) offsets, shape: B x [2, H*4, W*4]
+            - predicted keypoints, shape: B x [K, 2 + ncls] (x, y, logits)
         """
         cls_preds = []
         reg_preds = []
+        kp_preds = []
 
-        # Process each element in the batch separately to handle variable grid sizes
         for i in range(x.size(0)):
-            num_patches = grids[i][0] * grids[i][1]
+            H, W = grids[i]
+            num_patches = H * W
 
             # [1, N, C_in] -> [1, C_in, H, W], considering only valid patches
             valid_x = x[i, :num_patches]
-            valid_x = valid_x.permute(1, 0).view(1, -1, grids[i][0], grids[i][1])
+            valid_x = valid_x.permute(1, 0).view(1, -1, H, W)
 
             # Get feature map from the decoder [C_out, H*4, W*4]
             valid_x = self.decoder(valid_x)
             valid_x = self.drop_layer(valid_x)
 
             # Predict class probabilities and offsets
-            cls_preds.append(self.fc_cls(valid_x))
+            cls_pred = self.fc_cls(valid_x)
+            cls_preds.append(cls_pred)
             reg_preds.append(self.fc_reg(valid_x))
 
-        return cls_preds, reg_preds
+            # Predict keypoints directly
+            kp_preds.append(self._predict_keypoint(valid_x, cls_pred))
+
+        return cls_preds, reg_preds, kp_preds

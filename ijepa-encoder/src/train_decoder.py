@@ -30,13 +30,7 @@ from src.utils.distributed import (
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
-    gt_maps_to_cls_lists_v2,
-    p_maps_to_cls_lists,
-    p_maps_to_cls_lists_v2,
-    nms,
-    nms_v2,
-    evaluate_gt_p_match,
-    evaluate_gt_p_match_v2,
+    keypoint_sets,
     f1
 )
 
@@ -272,6 +266,7 @@ def main(args, resume_preempt=False):
     )
 
     # -- TRAIN / VAL LOOP
+    start_time = time.time()
     best_val_loss = float('inf')
     for epoch in range(start_epoch, num_epochs):
         logger.info(f'Epoch {epoch + 1}')
@@ -342,7 +337,7 @@ def main(args, resume_preempt=False):
                    else torch.cuda.max_memory_allocated()) / 1024.**2
             run.log({
                 'epoch': epoch + 1,
-                'time': time.time(),
+                'time': time.time() - start_time,
                 f'loss-{"train" if train else "val"}/total': loss_train_m.avg if train else loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/origin': org_loss_train_m.avg if train else org_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/classification': cls_loss_train_m.avg if train else cls_loss_val_m.avg,
@@ -363,10 +358,10 @@ def main(args, resume_preempt=False):
                 # Charts -> Embeddings
                 h = encoder(imgs, grids)
                 # Embeddings -> Predictions
-                p_cls, p_reg = decoder(h, grids)
-                return p_cls, p_reg
+                p_cls, p_reg, p_kps = decoder(h, grids)
+                return p_cls, p_reg, p_kps
 
-            def loss(gt_orgs, p_cls, gt_cls, p_reg, gt_reg):
+            def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_kps):
                 l_org = torch.tensor(0., device=device)
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
@@ -387,39 +382,44 @@ def main(args, resume_preempt=False):
                     p_reg_masked = torch.masked_select(p_reg[i], gt_cls[i].gt(0))
                     l_reg += F.mse_loss(p_reg_masked, gt_reg_masked)
 
-                    # Radius for nms and l_pts is based on max(H, W)
-                    radius_thresh = eval_thresh / sizes[i].max()
-                    # Convert maps to lists of bars & ticks + origin
-                    # gt_bars, gt_ticks = gt_maps_to_cls_lists(gt_cls[i], gt_reg[i], sizes[i])
-                    gt_bars2, gt_ticks2 = gt_maps_to_cls_lists_v2(gt_cls[i], gt_reg[i], sizes[i])
-                    # p_bars, p_ticks, p_org = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
-                    p_bars2, p_ticks2, p_org2 = p_maps_to_cls_lists_v2(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)
-                    # Filter predictions using nms
-                    # p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
-                    p_bars2, p_ticks2 = nms_v2(p_bars2, p_ticks2, radius_thresh)
+                    # Extract ground truth labels
+                    gt_bars, gt_ticks = gt_maps_to_cls_lists(
+                        gt_cls[i], gt_reg[i], sizes[i]
+                    )
 
-                    # Origin loss
-                    l_org += F.l1_loss(p_org2, gt_orgs[i])
+                    # Keypoint coordinates & probabilities
+                    kp_coords = p_kps[i][:, :2]
+                    kp_probs = torch.softmax(p_kps[i][:, 2:], dim=1)
 
-                    # Within class point loss
-                    # l_pts += evaluate_gt_p_match(
-                    #     gt_bars, gt_ticks,
-                    #     p_bars, p_ticks,
-                    #     radius_thresh) # type: ignore
-                    l_pts += evaluate_gt_p_match_v2(
-                        gt_bars2, gt_ticks2,
-                        p_bars2, p_ticks2,
-                        radius_thresh) # type: ignore
+                    # Origin coordinate loss
+                    origin_probs = kp_probs[:, 3]
+                    origin_weights = origin_probs / (origin_probs.sum() + 1e-8)
+                    p_org = (origin_weights[:, None] * kp_coords).sum(dim=0)
+                    l_org += F.l1_loss(p_org, gt_orgs[i])
 
-                    # Chart specific loss: Aligns tick x coordinates
-                    l_align += (p_ticks2 - p_org2).abs()[:,1].sum()
-                    # if len(p_ticks2) > 0:
-                    #     # Uses highest confidence origin point for loss
-                    #     l_align += (torch.stack(p_ticks2)[:,1] - p_org2[1]).abs().sum()
+                    # Entropy regularization (encourages one-hot selection)
+                    l_org += -0.05 * (origin_probs * torch.log(origin_probs + 1e-8)).sum()
 
-                # Weight losses according to scaling factors
-                l_pts /= 10.
-                l_align /= 1000.
+                    if use_pts_loss:
+                        l_pts += keypoint_sets(
+                            gt_bars,
+                            kp_coords,
+                            kp_probs[:, 1],   # bar probability
+                        )
+                        l_pts += keypoint_sets(
+                            gt_ticks,
+                            kp_coords,
+                            kp_probs[:, 2],   # tick probability
+                        )
+
+                    if use_align_loss:
+                        tick_mask = kp_probs[:, 2] > 0.5
+                        if tick_mask.sum() > 1:
+                            tick_x = kp_coords[tick_mask, 1]
+                            l_align += tick_x.var(unbiased=False) \
+                                    + (tick_x.mean() - p_org[1]).abs()
+
+
                 loss: torch.Tensor = l_org + l_cls + l_reg
                 if use_pts_loss:
                     loss += l_pts
@@ -439,15 +439,15 @@ def main(args, resume_preempt=False):
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                 if decoder.training:
-                    p_cls, p_reg = forward()
+                    p_cls, p_reg, p_kps = forward()
                     loss_start = time.time()
-                    loss, all_losses = loss(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
+                    loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_kps)
                     loss_end = time.time()
                     loss_time.update(loss_end-loss_start)
                 else:
                     with torch.no_grad():
-                        p_cls, p_reg = forward()
-                        loss, all_losses = loss(gt_orgs, p_cls, gt_cls, p_reg, gt_reg)
+                        p_cls, p_reg, p_kps = forward()
+                        loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_kps)
 
             # Backward & step
             if decoder.training:
