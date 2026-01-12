@@ -161,7 +161,7 @@ class KeypointDetector(nn.Module):
 
     def _predict_keypoint(
         self,
-        keypoint_logits: torch.Tensor,
+        kp_logits: torch.Tensor,
         cls_logits: torch.Tensor,
         org_logits: torch.Tensor,
     ) -> torch.Tensor:
@@ -169,40 +169,38 @@ class KeypointDetector(nn.Module):
         Directly predicts K keypoint coordinates and the
         corresponding class logits from the latent space.
 
-        :param keypoint_logits: Latent space predictions, shape [K, H x 4, W x 4]
+        :param kp_logits: Latent space predictions, shape [K, H x 4, W x 4]
         :param cls_logits: Class predictions, shape [ncls, H x 4, W x 4]
         :param org_logits: Origin prediction, shape [1, H x 4, W x 4]
         :return: Predicted keypoints, shape [K, 2 + ncls] (x, y, logits)
         """
-        _, H, W = keypoint_logits.shape
+        _, H, W = kp_logits.shape
         # Create grids [H, W, 2]
         ys, xs = torch.meshgrid(
-            (torch.arange(H, device=keypoint_logits.device) + 0.5) / H,
-            (torch.arange(W, device=keypoint_logits.device) + 0.5) / W,
+            (torch.arange(H, device=kp_logits.device) + 0.5) / H,
+            (torch.arange(W, device=kp_logits.device) + 0.5) / W,
             indexing="ij",
         )
         # Coordinates grid in image space [H*W, 2]
-        coords = torch.stack([ys, xs], dim=-1).view(-1, 2)
-        keypoint_logits = keypoint_logits.view(self.num_keypoints, -1)
+        coord_grid = torch.stack([ys, xs], dim=-1).view(-1, 2)
+        kp_logits = kp_logits.view(self.num_keypoints, -1)
         cls_logits = cls_logits.view(self.num_classes, -1).T
         org_logits = org_logits.view(1, -1).T
 
         # Spatial softmax per slot -> [K, H*W]
-        weights = torch.softmax(keypoint_logits, dim=1)
+        weights = torch.softmax(kp_logits, dim=1)
 
         # Predict coordinates -> [K, 2]
-        keypoints_coords = weights @ coords
+        kp_coords = weights @ coord_grid
 
-        # Class propabilities per slot [H*W, C] -> [K, C]
-        cls_probs = torch.softmax(cls_logits, dim=1)
-        keypoint_cls = weights @ cls_probs
+        # Class logits per slot [H*W, C] -> [K, C]
+        kp_cls_logits = weights @ cls_logits
 
-        # Origin probabilities per slot -> [K, 1]
-        org_prob = torch.sigmoid(org_logits)
-        keypoint_org = weights @ org_prob
+        # Origin logits per slot -> [K, 1]
+        kp_org_logits = weights @ org_logits
 
         return torch.cat(
-            [keypoints_coords, keypoint_cls, keypoint_org],
+            [kp_coords, kp_cls_logits, kp_org_logits],
             dim=1
         )
 
@@ -220,7 +218,7 @@ class KeypointDetector(nn.Module):
 
             - predicted class logits, shape: B x [ncls, H x 4, W x 4]
             - predicted (dy, dx) offsets, shape: B x [2, H x 4, W x 4]
-            - predicted keypoints, shape: B x [K, 2 + ncls + 1] (x, y, probabilities)
+            - predicted keypoints, shape: B x [K, 2 + ncls + 1] (x, y, logits)
         """
         cls_preds = []
         reg_preds = []
@@ -238,7 +236,7 @@ class KeypointDetector(nn.Module):
             valid_x = self.decoder(valid_x)
             valid_x = self.drop_layer(valid_x)
 
-            # Predict class probabilities and offsets
+            # Decode class logits and offsets from latent features
             cls_logits = self.fc_cls(valid_x)
             org_logits = self.fc_org(valid_x)
             reg = self.fc_reg(valid_x)
@@ -247,7 +245,7 @@ class KeypointDetector(nn.Module):
             cls_preds.append(torch.cat([cls_logits, org_logits], dim=0))
             reg_preds.append(reg)
 
-            # Predict keypoints directly
+            # Decode keypoints from latent features directly
             kp_preds.append(
                 self._predict_keypoint(
                     valid_x,

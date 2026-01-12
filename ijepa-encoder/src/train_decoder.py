@@ -397,7 +397,7 @@ def main(args, resume_preempt=False):
                     kp_probs = p_kps[i][:, 2:]
 
                     # Origin coordinate loss
-                    origin_probs = kp_probs[:, 3]
+                    origin_probs = torch.sigmoid(kp_probs[:, 3])
                     origin_weights = origin_probs / (origin_probs.sum() + 1e-8)
                     p_org = (origin_weights[:, None] * kp_coords).sum(dim=0)
                     l_org += F.l1_loss(p_org, gt_org.squeeze(0))

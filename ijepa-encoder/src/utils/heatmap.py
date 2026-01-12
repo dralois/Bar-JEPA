@@ -90,14 +90,14 @@ def gt_maps_to_cls_lists(
 def keypoint_sets(
     gt: torch.Tensor,              # [N, 2]
     slot_coords: torch.Tensor,     # [K, 2]
-    slot_probs: torch.Tensor,     # [K, C]
+    slot_logits: torch.Tensor,     # [K, C]
     cls_id: int,                   # bar or tick
     bg_id: int,
-    tau: float = 0.05,
-    sigma: float = 0.05,
+    tau: float = 0.04,
+    sigma: float = 0.12,
     lambda_missing: float = 1.0,
-    lambda_extra: float = 0.5,
-    lambda_bg: float = 0.5,
+    lambda_extra: float = 0.3,
+    lambda_bg: float = 0.5
 ):
     """
     Differentiable set loss with explicit background handling.
@@ -124,16 +124,15 @@ def keypoint_sets(
     w_slot = F.softmin(dists / tau, dim=0)      # [N, K]
     soft_dist_slot = (w_slot * dists).sum(dim=0)  # [K]
 
-    cls_conf = slot_probs[:, cls_id]
-    extra_loss = (cls_conf * soft_dist_slot).mean()
-
+    cls_prob = torch.softmax(slot_logits, dim=1)[:, cls_id]
+    extra_loss = (cls_prob * soft_dist_slot).mean()
     # ----------------------------
     # Background attraction
     # ----------------------------
-    bg_conf = slot_probs[:, bg_id]
+    bg_conf = slot_logits[:, bg_id]
     bg_target = (1.0 - torch.exp(-(soft_dist_slot / sigma) ** 2)).type_as(bg_conf)
 
-    bg_loss = F.binary_cross_entropy(
+    bg_loss = F.binary_cross_entropy_with_logits(
         bg_conf,
         bg_target.detach()
     )
