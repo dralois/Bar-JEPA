@@ -105,20 +105,21 @@ def keypoint_sets(
     lambda_missing: float = 1.0,
     lambda_claim: float = 1.0,
     lambda_bg: float = 0.5
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    _summary_
+    Matches predicted keypoints against ground truths.
+    Soft assignments & differentiable.
 
-    :param gt_coords: _description_
-    :param kp_coords: _description_
-    :param kp_logits: _description_
-    :param cls_id: _description_
+    :param gt_coords: Ground truth coordinates
+    :param kp_coords: All keypoint coordinates
+    :param kp_logits: All keypoint logits
+    :param cls_id: 1 = bar, 2 = tick
     :param tau: Soft assignment temperature
-    :param sigma: _description_, defaults to 0.12
-    :param lambda_missing: _description_, defaults to 1.0
-    :param lambda_claim: _description_, defaults to 1.0
-    :param lambda_bg: _description_, defaults to 0.5
-    :return: _description_
+    :param sigma: Distance threshold
+    :param lambda_missing: factor missing gt
+    :param lambda_claim: factor unclaimed gt
+    :param lambda_bg: factor erroneously claimed gt
+    :return: Tuple of losses
     """
     # Calculate pairwise distances
     diff = gt_coords.unsqueeze(1) - kp_coords
@@ -148,17 +149,11 @@ def keypoint_sets(
         bg_target.detach()
     )
 
-    logger.info('Loss %s:\t[%.3f + %.3f + %.3f + %.3f]',
-                'bars' if cls_id == 1 else 'ticks', dist_loss,
-                lambda_missing * missing_loss,
-                lambda_claim * claim_loss,
-                lambda_bg * bg_loss)
-
     return (
-        dist_loss
-        + lambda_missing * missing_loss
-        + lambda_claim * claim_loss
-        + lambda_bg * bg_loss)
+        dist_loss,
+        lambda_missing * missing_loss,
+        lambda_claim * claim_loss,
+        lambda_bg * bg_loss)
 
 
 def f1(

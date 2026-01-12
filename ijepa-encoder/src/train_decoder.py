@@ -367,6 +367,10 @@ def main(args, resume_preempt=False):
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
                 l_pts = torch.tensor(0., device=device)
+                l_pts_dist = torch.tensor(0., device=device)
+                l_pts_missing = torch.tensor(0., device=device)
+                l_pts_claim = torch.tensor(0., device=device)
+                l_pts_bg = torch.tensor(0., device=device)
                 l_align = torch.tensor(0., device=device)
                 sizes = torch.tensor([c.shape for c in gt_cls], device=device)
 
@@ -407,16 +411,20 @@ def main(args, resume_preempt=False):
                         l_org += 0.05 * (-(origin_weights * torch.log(origin_weights + 1e-8)).sum())
 
                     if use_pts_loss:
-                        l_pts += keypoint_sets(
+                        dist_bar, missing_bar, claim_bar, bg_bar = keypoint_sets(
                             gt_bars,
                             kp_coords,
                             kp_logits,
                             1)
-                        l_pts += keypoint_sets(
+                        dist_tick, missing_tick, claim_tick, bg_tick = keypoint_sets(
                             gt_ticks,
                             kp_coords,
                             kp_logits,
                             2)
+                        l_pts_dist += dist_tick + dist_bar
+                        l_pts_missing += missing_tick + missing_bar
+                        l_pts_claim += claim_tick + claim_bar
+                        l_pts_bg += bg_tick + bg_bar
 
                     if use_align_loss:
                         tick_mask = torch.softmax(kp_logits[:, 2], dim=1) > 0.5
@@ -425,9 +433,12 @@ def main(args, resume_preempt=False):
                             l_align += tick_x.var(unbiased=False) \
                                     + (tick_x.mean() - p_org[1]).abs()
 
+                logger.info('Loss pts:\t[%.3f + %.3f + %.3f + %.3f]',
+                            l_pts_dist, l_pts_missing, l_pts_claim, l_pts_bg)
+
                 # Apply scaling factors
                 l_org /= 5.
-                l_pts /= 10.
+                l_pts = (l_pts_dist + l_pts_missing + l_pts_claim + l_pts_bg) / 10.
                 l_align /= 1000.
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_pts + l_align
