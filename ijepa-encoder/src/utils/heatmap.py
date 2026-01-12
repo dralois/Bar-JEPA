@@ -1,7 +1,14 @@
+import sys
+import logging
+
 import torch
 import torch.nn.functional as F
 
 from typing import List, Tuple
+
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+logger = logging.getLogger()
+
 
 def cls_pts_to_maps(
     cls_pts_lists: List[torch.Tensor],
@@ -88,61 +95,70 @@ def gt_maps_to_cls_lists(
 
 
 def keypoint_sets(
-    gt: torch.Tensor,              # [N, 2]
-    slot_coords: torch.Tensor,     # [K, 2]
-    slot_logits: torch.Tensor,     # [K, C]
-    cls_id: int,                   # bar or tick
-    bg_id: int,
+    gt_coords: torch.Tensor,
+    kp_coords: torch.Tensor,
+    kp_logits: torch.Tensor,
+    cls_id: int,
+    # Hyperparameters
     tau: float = 0.04,
     sigma: float = 0.12,
     lambda_missing: float = 1.0,
-    lambda_extra: float = 0.3,
+    lambda_claim: float = 1.0,
     lambda_bg: float = 0.5
-):
+) -> torch.Tensor:
     """
-    Differentiable set loss with explicit background handling.
+    _summary_
+
+    :param gt_coords: _description_
+    :param kp_coords: _description_
+    :param kp_logits: _description_
+    :param cls_id: _description_
+    :param tau: Soft assignment temperature
+    :param sigma: _description_, defaults to 0.12
+    :param lambda_missing: _description_, defaults to 1.0
+    :param lambda_claim: _description_, defaults to 1.0
+    :param lambda_bg: _description_, defaults to 0.5
+    :return: _description_
     """
-    # --------------------------------------------------
-    # Pairwise distances [N, K]
-    # --------------------------------------------------
-    diff = gt[:, None, :] - slot_coords[None, :, :]
+    # Calculate pairwise distances
+    diff = gt_coords.unsqueeze(1) - kp_coords
     dists = torch.sqrt((diff * diff).sum(dim=2) + 1e-8)
 
-    # ----------------------------
-    # GT → slot (soft assignment)
-    # ----------------------------
-    w_gt = F.softmin(dists / tau, dim=1)        # [N, K]
-    soft_dist = (w_gt * dists).sum(dim=1)       # [N]
-    dist_loss = soft_dist.mean()
-
-    coverage = torch.exp(-(soft_dist / sigma) ** 2)
+    # Soft assign keypoints to ground truths
+    assign_kp_to_gt = F.softmin(dists / tau, dim=1)
+    soft_dist_gt = (assign_kp_to_gt * dists).sum(dim=1)
+    # Punish ground truths missing from predictions
+    coverage = torch.exp(-(soft_dist_gt / sigma) ** 2)
     missing_loss = (1.0 - coverage).mean()
 
-    # ----------------------------
-    # Slot → GT (extra slots)
-    # ----------------------------
-    w_slot = F.softmin(dists / tau, dim=0)      # [N, K]
-    soft_dist_slot = (w_slot * dists).sum(dim=0)  # [K]
+    # Punish predictions being far away from ground truth
+    dist_loss = soft_dist_gt.mean()
 
-    cls_prob = torch.softmax(slot_logits, dim=1)[:, cls_id]
-    extra_loss = (cls_prob * soft_dist_slot).mean()
-    # ----------------------------
-    # Background attraction
-    # ----------------------------
-    bg_conf = slot_logits[:, bg_id]
-    bg_target = (1.0 - torch.exp(-(soft_dist_slot / sigma) ** 2)).type_as(bg_conf)
+    # Punish ground truths not being claimed by predictions
+    cls_prob = torch.softmax(kp_logits[:, :3], dim=1)[:, cls_id]
+    gt_cls_conf = (assign_kp_to_gt * cls_prob).sum(dim=1)
+    claim_loss = (1.0 - gt_cls_conf).mean()
 
+    # Punish keypoints that should be background having the wrong class
+    assign_gt_to_kp = F.softmin(dists / tau, dim=0)
+    soft_dist_kp = (assign_gt_to_kp * dists).sum(dim=0)
+    bg_target = torch.sigmoid((soft_dist_kp - sigma) / (0.25 * sigma))
     bg_loss = F.binary_cross_entropy_with_logits(
-        bg_conf,
+        kp_logits[:, 0],
         bg_target.detach()
     )
+
+    logger.info('Loss %s:\t[%.3f + %.3f + %.3f + %.3f]',
+                'bars' if cls_id == 1 else 'ticks', dist_loss,
+                lambda_missing * missing_loss,
+                lambda_claim * claim_loss,
+                lambda_bg * bg_loss)
 
     return (
         dist_loss
         + lambda_missing * missing_loss
-        + lambda_extra * extra_loss
-        + lambda_bg * bg_loss
-    )
+        + lambda_claim * claim_loss
+        + lambda_bg * bg_loss)
 
 
 def f1(

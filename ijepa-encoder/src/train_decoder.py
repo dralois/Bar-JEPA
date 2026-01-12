@@ -319,7 +319,7 @@ def main(args, resume_preempt=False):
             mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
                    else torch.cuda.max_memory_allocated()) / 1024.**2
             if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
-                logger.info('%s: [%d, %5d] loss: %.3f '
+                logger.info('%s:\t[%d, %5d] loss: %.3f '
                             '[%.3f + %.3f + %.3f + %.3f + %.3f] '
                             '[mem: %.2e, lr: %.2e, wd: %.2e] '
                             '(%.1f | %.1f ms)'
@@ -394,12 +394,12 @@ def main(args, resume_preempt=False):
 
                     # Keypoint coordinates & probabilities
                     kp_coords = p_kps[i][:, :2]
-                    kp_probs = p_kps[i][:, 2:]
+                    kp_logits = p_kps[i][:, 2:]
 
                     # Origin coordinate loss
-                    origin_probs = torch.sigmoid(kp_probs[:, 3])
+                    origin_probs = torch.sigmoid(kp_logits[:, 3])
                     origin_weights = origin_probs / (origin_probs.sum() + 1e-8)
-                    p_org = (origin_weights[:, None] * kp_coords).sum(dim=0)
+                    p_org = (origin_weights.unsqueeze(1) * kp_coords).sum(dim=0)
                     l_org += F.l1_loss(p_org, gt_org.squeeze(0))
 
                     # Entropy regularization (encourage one-hot selection)
@@ -410,18 +410,16 @@ def main(args, resume_preempt=False):
                         l_pts += keypoint_sets(
                             gt_bars,
                             kp_coords,
-                            kp_probs,
-                            1, 0
-                        )
+                            kp_logits,
+                            1)
                         l_pts += keypoint_sets(
                             gt_ticks,
                             kp_coords,
-                            kp_probs,
-                            2, 0
-                        )
+                            kp_logits,
+                            2)
 
                     if use_align_loss:
-                        tick_mask = kp_probs[:, 2] > 0.5
+                        tick_mask = torch.softmax(kp_logits[:, 2], dim=1) > 0.5
                         if tick_mask.sum() > 1:
                             tick_x = kp_coords[tick_mask, 1]
                             l_align += tick_x.var(unbiased=False) \
