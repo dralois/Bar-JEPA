@@ -408,7 +408,7 @@ def main(args, resume_preempt=False):
 
                     # Entropy regularization (encourage one-hot selection)
                     if origin_probs.sum() > 1e-3:
-                        l_org += 0.05 * (-(origin_weights * torch.log(origin_weights + 1e-8)).sum())
+                        l_org += 0.1 * (-(origin_weights * torch.log(origin_weights + 1e-8)).sum())
 
                     if use_pts_loss:
                         dist_bar, missing_bar, claim_bar, bg_bar = keypoint_sets(
@@ -433,8 +433,9 @@ def main(args, resume_preempt=False):
                             l_align += tick_x.var(unbiased=False) \
                                     + (tick_x.mean() - p_org[1]).abs()
 
-                logger.info('Loss pts:\t[%.3f + %.3f + %.3f + %.3f]',
-                            l_pts_dist, l_pts_missing, l_pts_claim, l_pts_bg)
+                if use_pts_loss:
+                    logger.info('Loss pts:\t[%.3f + %.3f + %.3f + %.3f]',
+                                l_pts_dist, l_pts_missing, l_pts_claim, l_pts_bg)
 
                 # Apply scaling factors
                 l_org /= 5.

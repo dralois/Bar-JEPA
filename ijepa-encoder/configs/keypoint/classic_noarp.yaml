@@ -1,5 +1,5 @@
 data:
-  batch_size: 2048
+  batch_size: 1700
   color_jitter_strength: 0.0
   crop_scale:
   - 0.3
@@ -14,7 +14,7 @@ data:
   preserve_aspect_ratio: false
 logging:
   folder: ./output
-  write_tag: keypoint-classic-noarp
+  write_tag: kp-cl-noarp
 keypoint:
   max_keypoints: 64
   pnt_detect_thresh: 0.9
@@ -35,7 +35,7 @@ meta:
   finetune_epoch: 0
   use_bfloat16: true
 optimization:
-  epochs: 50
+  epochs: 60
   final_lr: 1.0e-06
   final_weight_decay: 0.4
   ipe_scale: 1.0
