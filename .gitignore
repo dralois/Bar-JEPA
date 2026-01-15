@@ -226,3 +226,7 @@ logs/**
 model/**
 **/wandb/**
 slurm_logs/**
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml

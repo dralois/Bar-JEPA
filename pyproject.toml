@@ -1,0 +1,35 @@
+[project]
+authors = [{name = "Alexander Epple", email = "alexander.epple@uni-ulm.de"}]
+dependencies = []
+name = "codebase"
+requires-python = ">= 3.11"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.pixi.workspace]
+channels = ["pytorch", "nvidia", "conda-forge"]
+platforms = ["osx-arm64", "win-64"]
+
+[tool.pixi.tasks]
+
+[tool.pixi.dependencies]
+python = "3.11.*"
+wandb = ">=0.23.1,<0.24"
+pyyaml = ">=6.0.3,<7"
+numpy = ">=2.4.1,<3"
+matplotlib = ">=3.10.8,<4"
+jsonschema = ">=4.26.0,<5"
+tqdm = ">=4.67.1,<5"
+pillow = ">=12.1.0,<13"
+
+[tool.pixi.target.osx-arm64.dependencies]
+pytorch = "2.6.*"
+torchvision = "0.21.*"
+
+[tool.pixi.target.win-64.dependencies]
+pytorch = "2.3.1.*"
+torchvision = "0.18.1.*"
+pytorch-cuda = "12.1.*"
