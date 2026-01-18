@@ -6,8 +6,8 @@ data:
   - 1.0
   crop_size: 224
   patch_size: 14
-  num_workers: 10
-  pin_mem: false
+  num_workers: 12
+  pin_mem: true
   root_path: ./data
   image_folder: images
   annotation_folder: annotations
@@ -24,8 +24,8 @@ keypoint:
   - 0.05
   - 1.0
   - 1.0
-  use_pts_loss: true
-  use_align_loss: true
+  use_pts_loss: false
+  use_align_loss: false
 meta:
   load_checkpoint: true
   model_name: vit_huge
