@@ -218,11 +218,10 @@ def main(args, resume_preempt=False):
                     p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
 
                     # Evalutate
-                    # b_p, b_r, t_p, t_r = evaluate_gt_p_match(
-                    #     gt_bars, gt_ticks,
-                    #     p_bars, p_ticks,
-                    #     radius_thresh) # type: ignore
-
+                    b_p, b_r, t_p, t_r = evaluate_gt_p_match(
+                        gt_bars, gt_ticks,
+                        p_bars, p_ticks,
+                        radius_thresh) # type: ignore
 
         decoder.eval()
         for _, (data, targets) in enumerate(val_loader):

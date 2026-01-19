@@ -272,8 +272,8 @@ def nms(
 
 
 def evaluate_gt_p_match(
-    gt_bars: List[torch.Tensor],
-    gt_ticks: List[torch.Tensor],
+    gt_bars: torch.Tensor,
+    gt_ticks: torch.Tensor,
     p_bars: List[torch.Tensor],
     p_ticks: List[torch.Tensor],
     dist_thresh: float
@@ -281,8 +281,8 @@ def evaluate_gt_p_match(
     """
     Evaluate predicted bars and ticks against ground truth.
 
-    :param gt_bars: list of ground truth bar positions, shape [2]
-    :param gt_ticks: list of ground truth tick positions, shape [2]
+    :param gt_bars: ground truth bar positions, shape [n, 2]
+    :param gt_ticks: ground truth tick positions, shape [m, 2]
     :param p_bars: list of predicted bar positions, shape [2]
     :param p_ticks: list of predicted tick positions, shape [2]
     :param dist_thresh: distance threshold for considering a match
@@ -297,7 +297,7 @@ def evaluate_gt_p_match(
     def closest_match(gt_elems, p_elems):
         if len(p_elems) > 0:
             # Calculate pairwise distances
-            g_comp = torch.stack(gt_elems).unsqueeze(1)                 # [n_gt, 1, 2]
+            g_comp = gt_elems.unsqueeze(1)                              # [n_gt, 1, 2]
             p_comp = torch.stack(p_elems).unsqueeze(0)                  # [1, n_p, 2]
             distances = torch.sqrt(((g_comp - p_comp) ** 2).sum(dim=2)) # [n_gt, n_p]
 
@@ -311,23 +311,23 @@ def evaluate_gt_p_match(
             # Set min distance to 0 if no matches were found
             min_dists = torch.where(matches.any(dim=1), min_dists, torch.zeros_like(min_dists))
 
-            # Return number of matching elements and total distance error
-            return matches.sum().item(), min_dists.sum()
+            # Return number of matching elements
+            return matches.sum().item()
         else:
             # No predictions, no matches
-            return 0, torch.zeros_like(gt_elems[0][0])
+            return 0
 
     # Calculate matches for ticks & bars
-    bar_matches, min_bar_dists = closest_match(gt_bars, p_bars)
-    tick_matches, min_tick_dists = closest_match(gt_ticks, p_ticks)
+    bar_matches = closest_match(gt_bars, p_bars)
+    tick_matches = closest_match(gt_ticks, p_ticks)
 
     # Calculate precision and recall for bars
-    bar_precision = (bar_matches / len(p_bars))
-    bar_recall = (bar_matches / len(gt_bars))
+    bar_precision = (bar_matches / len(p_bars)) if len(p_bars) > 0 else 0.
+    bar_recall = (bar_matches / len(gt_bars)) if len(gt_bars) > 0 else 0.
 
     # Calculate precision and recall for ticks
-    tick_precision = (tick_matches / len(p_ticks))
-    tick_recall = (tick_matches / len(gt_ticks))
+    tick_precision = (tick_matches / len(p_ticks)) if len(p_ticks) > 0 else 0.
+    tick_recall = (tick_matches / len(gt_ticks)) if len(gt_ticks) > 0 else 0.
 
     # Return all metrics
     return bar_precision, bar_recall, tick_precision, tick_recall
