@@ -76,8 +76,8 @@ fonts_list = list(filter(test_latin_font, font_manager.findSystemFonts()))
 
 
 styles = plt.style.available
-if 'dark_background' in styles:
-    styles.remove('dark_background')
+if "dark_background" in styles:
+    styles.remove("dark_background")
 
 
 def generate_random_samples(
@@ -94,17 +94,17 @@ def generate_random_samples(
     :return: Generated samples (per_location, locations)
     """
     sample_shape = (per_location, locations)
-    distribution_type = random.choice(['uniform', 'gamma', 'gaussian', 'exponential'])
+    distribution_type = random.choice(["uniform", "gamma", "gaussian", "exponential"])
 
-    if distribution_type == 'uniform':
+    if distribution_type == "uniform":
         values = np.random.uniform(size=sample_shape)
-    elif distribution_type == 'gamma':
+    elif distribution_type == "gamma":
         shape, scale = random.uniform(0.5, 3), random.uniform(1, 10)
         values = np.random.gamma(shape, scale, size=sample_shape)
-    elif distribution_type == 'gaussian':
+    elif distribution_type == "gaussian":
         mean, std = random.uniform(20, 80), random.uniform(5, 20)
         values = np.random.normal(mean, std, size=sample_shape)
-    elif distribution_type == 'exponential':
+    elif distribution_type == "exponential":
         scale = random.uniform(1, 20)
         values = np.random.exponential(scale, size=sample_shape)
 
@@ -523,8 +523,8 @@ def bbox_one_line(json_str):
     """
     Rewrites multi-line bbox to be one line
     """
-    bbox_pattern = re.compile(r'"(?:bbox|origin)":\s*\[([^\]]+)\]', re.DOTALL)
-    return bbox_pattern.sub(lambda m: f'"bbox": [{",".join([x.strip() for x in m.group(1).split(",")])}]', json_str)
+    bbox_pattern = re.compile(r"'(?:bbox|origin)':\s*\[([^\]]+)\]", re.DOTALL)
+    return bbox_pattern.sub(lambda m: f"'bbox': [{','.join([x.strip() for x in m.group(1).split(',')])}]", json_str)
 
 
 def generate_plots_chunk(args):
@@ -546,7 +546,7 @@ def generate_plots_chunk(args):
         # Save JSON
         json_id = "{}_{}.{}".format(train_or_test, i, "json")
         json_path = os.path.join(store_dir, "annotations", json_id)
-        with open(json_path, 'w') as f:
+        with open(json_path, "w") as f:
             json_str = bbox_one_line(json.dumps(annotation, indent=2))
             f.write(json_str)
 
@@ -582,7 +582,7 @@ def generate_plots(output_dir, n, num_processes, clear, val, train_or_test):
     # Load the schema if validation is enabled
     schema = None
     if val:
-        with open('format.json', 'r') as f:
+        with open("format.json", "r") as f:
             schema = json.load(f)
 
     # Create a list of arguments for each task
@@ -598,13 +598,13 @@ def generate_plots(output_dir, n, num_processes, clear, val, train_or_test):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="This python script generates random bar charts and their elements' bounding boxes")
-    parser.add_argument('--output_dir', help='Directory to save the images and JSON files.', required=True, type=str)
+        description="This python script generates random bar charts and their elements bounding boxes")
+    parser.add_argument("--output_dir", help="Directory to save the images and JSON files.", required=True, type=str)
     parser.add_argument("--train_total", help="Number of traning images", required=True, type=int)
     parser.add_argument("--test_total", help="Number of test images", required=True, type=int)
     parser.add_argument("--num_processes", help="Number of processes to use", default=1, type=int)
-    parser.add_argument('--clear_output', help='Clear the output directory before generation.', action='store_true')
-    parser.add_argument('--validate', help='Validate the generated JSON annotations against the schema.', action='store_true')
+    parser.add_argument("--clear_output", help="Clear the output directory before generation.", action="store_true")
+    parser.add_argument("--validate", help="Validate the generated JSON annotations against the schema.", action="store_true")
 
     args = parser.parse_args()
 
