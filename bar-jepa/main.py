@@ -66,6 +66,9 @@ def process_main(rank, mode, fname, world_size, devices):
             case 'decoder':
                 from src.train_decoder import main as decoder_main
                 decoder_main(args=params)
+            case 'eval':
+                from src.eval_decoder import main as eval_main
+                eval_main(args=params)
             case _:
                 raise ValueError(f'Unknown mode: {mode}')
     except Exception as ex:

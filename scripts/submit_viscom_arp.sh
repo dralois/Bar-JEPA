@@ -6,6 +6,6 @@ COMMAND="whereis python && python ./bar-jepa/main.py --mode decoder --fname ./ba
 # Submit the job to the cluster
 submit "$COMMAND" \
     --custom dralois/ijepa-decoder:latest \
-    --gpus 6000:2 \
+    --gpus 6000:1 \
     --name ijepa_decoder \
     --max-time 1-0

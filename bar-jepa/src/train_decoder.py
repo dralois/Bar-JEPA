@@ -22,7 +22,6 @@ import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import random_split
 
 from src.utils.distributed import (
     init_distributed,
@@ -41,7 +40,7 @@ from src.utils.logging import (
 
 from src.datasets.charts import make_charts
 
-from src.masks.default import DefaultCollator
+from src.masks.charts import ChartsCollator
 
 from src.helper import (
     load_decoder_checkpoint,
@@ -194,7 +193,7 @@ def main(args, resume_preempt=False):
         patch_size=patch_size)
 
     # -- init data-loaders/samplers
-    collator = DefaultCollator()
+    collator = ChartsCollator()
     train_loader, train_sampler, val_loader, val_sampler = make_charts( # type: ignore
             transform=transform,
             batch_size=batch_size,
