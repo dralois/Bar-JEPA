@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=train-noarp          # job name
+#SBATCH --job-name=train-arp            # job name
 #SBATCH --time=24:00:00                 # time limit
 #SBATCH --nodes=1                       # 1 node
 #SBATCH --gres=gpu:4                    # 4 GPUs
@@ -19,7 +19,7 @@ module load cineca-ai/4.1.1
 nvidia-smi
 
 # Navigate to working directory
-cd $WORK/ijepa-bars/ijepa-encoder
+cd $WORK/bar-jepa/bar-jepa
 
 # Execute your script
-python main_finetune.py --fname configs/charts_vith14_noarp.yaml --devices cuda:0 cuda:1 cuda:2 cuda:3
+python main_finetune.py --fname configs/charts/vith14_arp.yaml --devices cuda:0 cuda:1 cuda:2 cuda:3
