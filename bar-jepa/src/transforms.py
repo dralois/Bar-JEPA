@@ -10,7 +10,6 @@ from logging import getLogger
 from math import floor
 
 from PIL import ImageFilter
-from PIL.Image import Image
 
 import torch
 import torchvision.transforms as transforms
@@ -88,6 +87,7 @@ class ResizeToFixedPatches(object):
         image_height, image_width = img.size
 
         scale = (self.max_patches * (self.patch_size / image_height) * (self.patch_size / image_width)) ** 0.5
+        scale += 1e-6
 
         num_feasible_rows = max(min(floor(scale * image_height / self.patch_size), self.max_patches), 1)
         num_feasible_cols = max(min(floor(scale * image_width / self.patch_size), self.max_patches), 1)
