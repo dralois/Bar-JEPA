@@ -523,8 +523,14 @@ def bbox_one_line(json_str):
     """
     Rewrites multi-line bbox to be one line
     """
-    bbox_pattern = re.compile(r"'(?:bbox|origin)':\s*\[([^\]]+)\]", re.DOTALL)
-    return bbox_pattern.sub(lambda m: f"'bbox': [{','.join([x.strip() for x in m.group(1).split(',')])}]", json_str)
+    for field in ['bbox', 'origin']:
+        json_str = re.sub(
+            rf"""['"]{field}['"]\s*:\s*\[([^\]]+)\]""",
+            lambda m: f'"{field}": [{",".join(x.strip() for x in m.group(1).split(","))}]',
+            json_str,
+            flags=re.DOTALL | re.VERBOSE
+        )
+    return json_str
 
 
 def generate_plots_chunk(args):
