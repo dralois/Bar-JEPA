@@ -343,7 +343,8 @@ def main(args, resume_preempt=False):
                         B = len(h)
                         # -- create targets (masked regions of h)
                         h = apply_masks(h, masks_pred)
-                        h = repeat_interleave_batch(h, B, repeat=len(masks_enc[0]))
+                        nenc = len(masks_enc[0]) if len(masks_enc) > 0 else 1
+                        h = repeat_interleave_batch(h, B, repeat=nenc)
                         return h
 
                 def forward_context():
