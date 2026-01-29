@@ -127,11 +127,17 @@ def main(args, resume_preempt=False):
     dump = os.path.join(folder, 'params-ijepa.yaml')
     with open(dump, 'w') as f:
         yaml.dump(args, f)
+
+    logger.info(f'Python version: {sys.version}, PyTorch version: {torch.__version__}')
     # ----------------------------------------------------------------------- #
 
     # -- create device
     if not torch.cuda.is_available():
-        device = torch.device('cpu') if not torch.mps.is_available() else torch.device('mps')
+        try:
+            device = torch.device('cpu') if not torch.mps.is_available() else torch.device('mps')
+        except AttributeError:
+            device = torch.device('cpu')
+        logger.warning(f'Falling back to {device.type}.')
     else:
         device = torch.device('cuda:0')
         torch.cuda.set_device(device)
@@ -141,11 +147,12 @@ def main(args, resume_preempt=False):
         autocast_dtype = torch.bfloat16 if (
             use_bfloat16 and (
                 torch.cuda.is_bf16_supported() or
-                torch.cpu._is_avx512_bf16_supported()
+                torch.cpu._is_avx512_bf16_supported() or
+                device.type == 'mps'
             )
         ) else (torch.float16 if use_bfloat16 else torch.float32)
     except Exception as e:
-        logger.warning(f'Error checking bfloat16 support: {e}. Falling back to float16')
+        logger.warning(f'Error checking bfloat16 support: {e}. Falling back to float16.')
         autocast_dtype = torch.float16 if use_bfloat16 else torch.float32
 
     # -- dataloader
@@ -213,7 +220,7 @@ def main(args, resume_preempt=False):
         patch_size=patch_size)
 
     # -- init data-loaders/samplers
-    unsupervised_loader, unsupervised_sampler = make_charts(
+    unsupervised_loader, unsupervised_sampler = make_charts( # type: ignore
             transform=transform,
             batch_size=batch_size,
             patch_size=patch_size,
@@ -242,7 +249,7 @@ def main(args, resume_preempt=False):
         wd=wd,
         final_wd=final_wd,
         final_lr=final_lr,
-        use_bfloat16=use_bfloat16,
+        device=device.type,
         ipe_scale=ipe_scale)
 
     if world_size != 1:
@@ -401,7 +408,7 @@ def main(args, resume_preempt=False):
 
                 if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
                     logger.info('[%d, %5d] loss: %.3f '
-                                'masks: %.1f %.1f (max %.1f %.1f) '
+                                'masks: %.1f %.1f '
                                 '[wd: %.2e] [lr: %.2e] '
                                 '[mem: %.2e] '
                                 '(%.1f ms)'
@@ -409,8 +416,6 @@ def main(args, resume_preempt=False):
                                    loss_meter.avg,
                                    maskA_meter.avg,
                                    maskB_meter.avg,
-                                   maskA_meter.max,
-                                   maskB_meter.max,
                                    _new_wd,
                                    _new_lr,
                                    mem,
@@ -430,10 +435,8 @@ def main(args, resume_preempt=False):
                     "gpu-mem": mem,
                     "lr": _new_lr,
                     "wd": _new_wd,
-                    "mask/enc_avg": maskA_meter.avg,
-                    "mask/enc_max": maskA_meter.max,
-                    "mask/pred_avg": maskB_meter.avg,
-                    "mask/pred_max": maskB_meter.max,
+                    "mask/enc": maskA_meter.avg,
+                    "mask/pred": maskB_meter.avg,
                     "gradients/first-layer": None if grad_stats is None else grad_stats.first_layer,
                     "gradients/last-layer": None if grad_stats is None else grad_stats.last_layer,
                     "gradients/min": None if grad_stats is None else grad_stats.min,

@@ -229,7 +229,7 @@ def init_ijepa_opt(
     wd=1e-6,
     final_wd=1e-6,
     final_lr=0.0,
-    use_bfloat16=False,
+    device='cpu',
     ipe_scale=1.25
 ):
     param_groups = [
@@ -266,7 +266,7 @@ def init_ijepa_opt(
         ref_wd=wd,
         final_wd=final_wd,
         T_max=int(ipe_scale*num_epochs*iterations_per_epoch))
-    scaler = torch.cuda.amp.GradScaler() if use_bfloat16 else None
+    scaler = torch.cuda.amp.GradScaler(enabled=not (device == 'mps' or device == 'cpu'))
     return optimizer, scaler, scheduler, wd_scheduler
 
 

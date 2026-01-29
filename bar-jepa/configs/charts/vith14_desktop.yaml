@@ -2,7 +2,7 @@ data:
   batch_size: 4
   color_jitter_strength: 0.0
   crop_scale:
-  - 0.3
+  - 0.5
   - 1.0
   crop_size: 224
   num_workers: 2
@@ -46,11 +46,11 @@ optimization:
   ema:
   - 0.996
   - 1.0
-  epochs: 1
+  epochs: 50
   final_lr: 1.0e-06
-  final_weight_decay: 0.4
+  final_weight_decay: 0.05
   ipe_scale: 1.0
-  lr: 0.001
-  start_lr: 0.0002
+  lr: 1.0e-05
+  start_lr: 1.0e-06
   warmup: 3
-  weight_decay: 0.04
+  weight_decay: 0.05
