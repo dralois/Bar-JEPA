@@ -56,37 +56,38 @@ def apply_masks(x, batched_masks):
 
     :param x: tensor of shape [B (batch-size), N (num-patches), D (feature-dim)]
     :param batched_masks: list of masks, shape [B x [nmasks]] or [nmasks x B]
-    :return: tensor of shape [B * nmasks, N, D], where masked patches are zeroed
+    :return: tensor of shape [B, N, D], where masked patches are zeroed
     """
     if len(batched_masks) == 0:
         return x
 
-    if isinstance(batched_masks[0], torch.Tensor):
-        batched_masks = [[mask] for mask in batched_masks]
-
     B = x.size(0)
-    if len(batched_masks) == B and len(batched_masks[0]) != B:
-        # Convert [B x nmasks] -> [nmasks x B]
-        num_masks = len(batched_masks[0])
-        batched_masks = [[batched_masks[b][m] for b in range(B)] for m in range(num_masks)]
+    if isinstance(batched_masks[0], torch.Tensor):
+        if len(batched_masks) == B:
+            batched_masks = [[mask] for mask in batched_masks]
+        else:
+            raise ValueError('apply_masks expects masks as [B x nmasks] or [nmasks x B]')
 
-    if len(batched_masks[0]) != B:
-        raise ValueError('apply_masks expects masks as [B x nmasks] or [nmasks x B]')
+    if len(batched_masks) != B:
+        if len(batched_masks[0]) == B:
+            num_masks = len(batched_masks)
+            batched_masks = [[batched_masks[m][b] for m in range(num_masks)] for b in range(B)]
+        else:
+            raise ValueError('apply_masks expects masks as [B x nmasks] or [nmasks x B]')
 
-    all_x = []
-    for masks_for_repeat in batched_masks:
-        m_val = torch.zeros_like(x, device=x.device)
-        for batch_idx, mask in enumerate(masks_for_repeat):
+    N = x.size(1)
+    mask_union = torch.zeros((B, N), dtype=torch.bool, device=x.device)
+    for batch_idx, masks_for_sample in enumerate(batched_masks):
+        for mask in masks_for_sample:
             if mask.dtype == torch.bool:
                 m_idx = torch.nonzero(mask.view(-1), as_tuple=False).squeeze(1)
             else:
                 m_idx = mask.view(-1)
             if m_idx.numel() == 0:
                 continue
-            m_idx = m_idx.unsqueeze(1).expand(-1, x.size(-1))
-            m_val[batch_idx].scatter_(0, m_idx, 1.0)
-        all_x.append(x * m_val)
-    return torch.cat(all_x, dim=0)
+            mask_union[batch_idx, m_idx] = True
+
+    return x * mask_union.unsqueeze(-1)
 
 
 def repeat_interleave_batch(x, B, repeat):
