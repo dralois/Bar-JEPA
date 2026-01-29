@@ -82,6 +82,28 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     return emb
 
 
+def interpolate_pos_encoding(x, pos_embed, grid_sizes):
+    B, N, D = x.shape
+    grid_h = grid_w = int(math.sqrt(pos_embed.shape[1]))
+    # Position embeddings [D, N] -> [1, D, sqrt(N), sqrt(N)]
+    pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
+    output = torch.zeros(B, N, D, device=x.device)
+
+    for i in range(B):
+        h, w = grid_sizes[i]
+        pos_embed_interp = nn.functional.interpolate(
+            pos_embed_2d,
+            size=(h, w),
+            mode='bicubic',
+            align_corners=False
+        )
+        # [1, D, h, w] -> [1, h*w, D]
+        pos_embed_interp = pos_embed_interp.permute(0, 2, 3, 1).reshape(1, h * w, D)
+        output[i, :h*w, :] = pos_embed_interp
+
+    return output
+
+
 def drop_path(x, drop_prob: float = 0., training: bool = False):
     if drop_prob == 0. or not training:
         return x
@@ -194,34 +216,6 @@ class PatchEmbed(nn.Module):
         return x
 
 
-class ConvEmbed(nn.Module):
-    """
-    3x3 Convolution stems for ViT following ViTC models
-    """
-
-    def __init__(self, channels, strides, img_size=224, in_chans=3, batch_norm=True):
-        super().__init__()
-        # Build the stems
-        stem = []
-        channels = [in_chans] + channels
-        for i in range(len(channels) - 2):
-            stem += [nn.Conv2d(channels[i], channels[i+1], kernel_size=3,
-                               stride=strides[i], padding=1, bias=(not batch_norm))]
-            if batch_norm:
-                stem += [nn.BatchNorm2d(channels[i+1])]
-            stem += [nn.ReLU(inplace=True)]
-        stem += [nn.Conv2d(channels[-2], channels[-1], kernel_size=1, stride=strides[-1])]
-        self.stem = nn.Sequential(*stem)
-
-        # Comptute the number of patches
-        stride_prod = int(np.prod(strides))
-        self.num_patches = (img_size[0] // stride_prod)**2
-
-    def forward(self, x):
-        p = self.stem(x)
-        return p.flatten(2).transpose(1, 2)
-
-
 class VisionTransformerPredictor(nn.Module):
     """ Vision Transformer """
     def __init__(
@@ -321,7 +315,7 @@ class VisionTransformerPredictor(nn.Module):
             raise ValueError('masks_x does not match batch size of x')
 
         # -- add positional embedding to context tokens
-        pos_embed_full = self.interpolate_pos_encoding(
+        pos_embed_full = interpolate_pos_encoding(
             torch.zeros((B_ctx, self.max_patches, D), device=x.device),
             self.predictor_pos_embed,
             grids
@@ -360,29 +354,6 @@ class VisionTransformerPredictor(nn.Module):
         x = self.predictor_proj(x)
 
         return x
-
-    def interpolate_pos_encoding(self, x, pos_embed, grid_sizes):
-        B, N, D = x.shape
-        grid_h = grid_w = int(math.sqrt(pos_embed.shape[1]))
-
-        # Position embeddings [D, N] -> [1, D, sqrt(N), sqrt(N)]
-        pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
-        output = torch.zeros(B, N, D, device=x.device)
-
-        # Interpolate embeddings for each patch grid size
-        for i in range(B):
-            h, w = grid_sizes[i]
-            pos_embed_interp = nn.functional.interpolate(
-                pos_embed_2d,
-                size=(h, w),
-                mode='bicubic',
-                align_corners=False
-            )
-            # [1, D, H, W] -> [1, H * W, D]
-            pos_embed_interp = pos_embed_interp.permute(0, 2, 3, 1).reshape(1, h * w, D)
-            output[i, :h*w, :] = pos_embed_interp
-
-        return output
 
 
 class VisionTransformer(nn.Module):
@@ -478,7 +449,7 @@ class VisionTransformer(nn.Module):
         x = torch.cat(x)
 
         # -- Interpolate positional encoding
-        pos_embed = self.interpolate_pos_encoding(x, self.pos_embed, grids)
+        pos_embed = interpolate_pos_encoding(x, self.pos_embed, grids)
 
         # -- Add positional embedding to x
         x = x + pos_embed
@@ -503,27 +474,6 @@ class VisionTransformer(nn.Module):
 
         # Mask output embeddings (should not contribute to loss)
         return x * attention_mask.unsqueeze(-1)
-
-    def interpolate_pos_encoding(self, x, pos_embed, grid_sizes):
-        B, N, D = x.shape
-        grid_h = grid_w = int(math.sqrt(pos_embed.shape[1]))
-        # Position embeddings [D, N] -> [1, D, sqrt(N), sqrt(N)]
-        pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
-        output = torch.zeros(B, N, D, device=self.pos_embed.device)
-
-        for i in range(B):
-            h, w = grid_sizes[i]
-            pos_embed_interp = nn.functional.interpolate(
-                pos_embed_2d,
-                size=(h, w),
-                mode='bicubic',
-                align_corners=False
-            )
-            # [1, D, h, w] -> [1, h*w, D]
-            pos_embed_interp = pos_embed_interp.permute(0, 2, 3, 1).reshape(1, h * w, D)
-            output[i, :h*w, :] = pos_embed_interp
-
-        return output
 
 
 def vit_predictor(**kwargs):
