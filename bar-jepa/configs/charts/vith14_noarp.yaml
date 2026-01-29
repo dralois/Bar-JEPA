@@ -1,5 +1,5 @@
 data:
-  batch_size: 8
+  batch_size: 42
   color_jitter_strength: 0.0
   crop_scale:
   - 0.5
@@ -8,8 +8,8 @@ data:
   num_workers: 10
   pin_mem: true
   root_path: /pfs/work9/workspace/scratch/ul_spm55-mydata-ssd/data/
-  image_folder: /images/
-  annotation_folder: /annotations/
+  image_folder: images
+  annotation_folder: annotations
   use_color_distortion: false
   use_gaussian_blur: false
   use_horizontal_flip: false

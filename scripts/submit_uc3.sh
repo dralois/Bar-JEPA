@@ -4,14 +4,14 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/submit_uc3_arp.sh --mode test --arp
-  scripts/submit_uc3_arp.sh --mode train --partition gpu_h100 --no-arp
+  scripts/submit_uc3.sh --mode test --arp
+  scripts/submit_uc3.sh --mode train --partition gpu_h100 --no-arp
 
 Options:
-  --mode test|train           Required. Select test (short) or train (1 day).
+  --mode test|train           Required. Select test (20 min) or train (12 hours).
   --partition NAME            Required for train. e.g. gpu_h100 | gpu_a100_il | gpu_h100_il
-  --arp                        Use ARP config (default)
-  --no-arp                     Use no-ARP config
+  --arp                       Use ARP config (default)
+  --no-arp                    Use no-ARP config
 EOF
 }
 
@@ -22,11 +22,11 @@ ARP_MODE="arp"
 TIME=""
 GPUS=""
 CPUS_PER_TASK=""
-MEM_PER_GPU=""
+MEM_PER_GPU="55G"
 PROJECT_DIR="$HOME/Bar-JEPA"
 WORKSPACE_PATH="/pfs/work9/workspace/scratch/ul_spm55-mydata-ssd"
-DATASET_TGZ="dataset.tgz"
-DATASET_DIR="data"
+DATASET_TGZ="data.tar"
+DATASET_DIR=""
 IMAGE="dralois/ijepa-decoder:latest"
 LOG_DIR="slurm_logs"
 
@@ -54,28 +54,36 @@ if [[ "$MODE" != "test" && "$MODE" != "train" ]]; then
 fi
 
 if [[ "$MODE" == "test" ]]; then
-  PARTITION="${PARTITION:-gpu_a100_short}"
+  if [[ -n "$PARTITION" ]]; then
+    case "$PARTITION" in
+      dev_gpu_h100|gpu_a100_short) PARTITION="$PARTITION" ;;
+      *) echo "Error: test mode supports dev_gpu_h100 or gpu_a100_short." >&2; exit 1 ;;
+    esac
+  else
+    PARTITION="dev_gpu_h100"
+  fi
   TIME="00:20:00"
-  GPUS="1"
+  if [[ "$PARTITION" == "gpu_a100_short" ]]; then
+    GPUS="1"
+  else
+    GPUS="4"
+  fi
   CPUS_PER_TASK="10"
-  MEM_PER_GPU="40G"
+  MEM_PER_GPU="55G"
   JOB_NAME="arp-test"
+  DATASET_DIR="data/test"
 else
   if [[ -z "$PARTITION" ]]; then
     echo "Error: --partition is required for train mode." >&2
     usage
     exit 1
   fi
-  TIME="24:00:00"
+  TIME="12:00:00"
   GPUS="4"
   CPUS_PER_TASK="10"
-  MEM_PER_GPU="94G"
-  if [[ "$PARTITION" == "gpu_a100_il" ]]; then
-    MEM_PER_GPU="80G"
-  elif [[ "$PARTITION" == "gpu_h100_il" ]]; then
-    MEM_PER_GPU="94G"
-  fi
+  MEM_PER_GPU="55G"
   JOB_NAME="arp-train"
+  DATASET_DIR="data/train"
 fi
 
 if [[ "$ARP_MODE" == "arp" ]]; then
@@ -116,6 +124,13 @@ $CONTAINER_MOUNTS_LINE
 
 nvidia-smi
 
+if [[ -n "\$TMPDIR" && -d "\$TMPDIR" ]]; then
+  : # keep Slurm-provided TMPDIR if it exists
+else
+  export TMPDIR="/tmp/slurm_tmpdir_\${SLURM_JOB_ID}"
+fi
+mkdir -p "\$TMPDIR"
+
 PROJECT_DIR=$PROJECT_DIR
 WORKSPACE_PATH=$WORKSPACE_PATH
 DATASET_TGZ=$DATASET_TGZ
@@ -131,13 +146,14 @@ if [[ -n "\$DATASET_TGZ" ]]; then
     exit 1
   fi
   echo "Staging tarball \$SRC_TGZ to \$TMPDIR ..."
-  tar -C "\$TMPDIR" -xvzf "\$SRC_TGZ"
+  tar -C "\$TMPDIR" -xf "\$SRC_TGZ"
 fi
 
 sed "s|^  root_path: .*|  root_path: \${DATA_ROOT}/|" "\$PROJECT_DIR/bar-jepa/configs/charts/$CONFIG_NAME" > "\$CONFIG_PATH"
 echo "Using staged root_path: \${DATA_ROOT}/"
 
 python \$PROJECT_DIR/bar-jepa/main.py \\
+  --mode finetune \\
   --fname \$CONFIG_PATH \\
   --devices $DEVICES
 EOF
