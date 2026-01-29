@@ -7,7 +7,7 @@ data:
   crop_size: 224
   num_workers: 10
   pin_mem: true
-  root_path: /leonardo_scratch/fast/EUHPC_D18_087/adata/data/
+  root_path: /pfs/work9/workspace/scratch/ul_spm55-mydata-ssd/data/
   image_folder: /images/
   annotation_folder: /annotations/
   use_color_distortion: false
@@ -15,7 +15,7 @@ data:
   use_horizontal_flip: false
   preserve_aspect_ratio: true
 logging:
-  folder: /leonardo_scratch/large/userexternal/aepple00/output-arp/
+  folder: /pfs/work9/workspace/scratch/ul_spm55-mydata-ssd/output-arp/
   write_tag: jepa
 mask:
   allow_overlap: false
@@ -38,8 +38,8 @@ meta:
   model_name: vit_huge
   pred_depth: 12
   pred_emb_dim: 384
-  read_checkpoint: /leonardo_scratch/large/userexternal/aepple00/jepa-ep360.pth.tar
-  checkpoint_epoch: 360
+  read_checkpoint: ../checkpoints/IN1K-vit.h.14-300e.pth.tar
+  checkpoint_epoch: 300
   do_finetune: true
   use_bfloat16: true
 optimization:
