@@ -50,42 +50,6 @@ def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
-def apply_masks(x, batched_masks):
-    """
-    Applies masks to a batch of input sequences.
-
-    :param x: tensor of shape [B (batch-size), N (num-patches), D (feature-dim)]
-    :param batched_masks: list of masks, shape [B x [nmasks]]
-    :return: tensor of shape [B * nmasks, N, D], where masked patches are zeroed
-    """
-    if len(batched_masks) == 0:
-        return x
-
-    B = x.size(0)
-    if len(batched_masks) != B:
-        raise ValueError('apply_masks expects masks as [B x nmasks]')
-
-    N = x.size(1)
-    all_x = []
-    num_masks = len(batched_masks[0])
-    for mask_idx in range(num_masks):
-        m_val = torch.zeros((B, N), dtype=torch.bool, device=x.device)
-        for batch_idx in range(B):
-            mask = batched_masks[batch_idx][mask_idx]
-            if mask.dtype != torch.bool:
-                raise ValueError('apply_masks expects boolean masks')
-            mask = mask.view(-1)
-            if mask.numel() < N:
-                pad = mask.new_zeros(N - mask.numel())
-                mask = torch.cat([mask, pad], dim=0)
-            elif mask.numel() > N:
-                mask = mask[:N]
-            m_val[batch_idx] |= mask
-        all_x.append(x * m_val.unsqueeze(-1))
-
-    return torch.cat(all_x, dim=0)
-
-
 def pack_by_masks(x, batched_masks):
     """
     Packs masked tokens into a padded batch.
@@ -104,38 +68,49 @@ def pack_by_masks(x, batched_masks):
         raise ValueError('pack_by_masks expects masks as [B x nmasks]')
 
     num_masks = len(batched_masks[0])
-    indices_per_mask = []
-    max_len = 0
-    for mask_idx in range(num_masks):
-        idx_list = []
-        for batch_idx in range(B):
-            mask = batched_masks[batch_idx][mask_idx]
-            if mask.dtype != torch.bool:
-                raise ValueError('pack_by_masks expects boolean masks')
-            mask = mask.view(-1)
-            if mask.numel() < N:
-                pad = mask.new_zeros(N - mask.numel())
-                mask = torch.cat([mask, pad], dim=0)
-            elif mask.numel() > N:
-                mask = mask[:N]
-            idx = torch.nonzero(mask, as_tuple=False).squeeze(1)
-            idx_list.append(idx)
-            max_len = max(max_len, idx.numel())
-        indices_per_mask.append(idx_list)
+    if num_masks == 0:
+        return x.new_zeros((0, 0, D)), torch.zeros((0, 0), device=x.device, dtype=torch.bool)
+    for masks in batched_masks:
+        if len(masks) != num_masks:
+            raise ValueError('pack_by_masks expects a consistent number of masks per batch')
 
-    packed = x.new_zeros((B * num_masks, max_len, D))
-    attn = torch.zeros((B * num_masks, max_len), device=x.device, dtype=torch.bool)
+    def normalize_mask(mask):
+        if mask.dtype != torch.bool:
+            raise ValueError('pack_by_masks expects boolean masks')
+        mask = mask.to(device=x.device).view(-1)
+        if mask.numel() < N:
+            pad = mask.new_zeros(N - mask.numel())
+            mask = torch.cat([mask, pad], dim=0)
+        elif mask.numel() > N:
+            mask = mask[:N]
+        return mask
 
-    for mask_idx, idx_list in enumerate(indices_per_mask):
-        for batch_idx, idx in enumerate(idx_list):
-            row = mask_idx * B + batch_idx
-            if idx.numel() == 0:
-                continue
-            L = idx.numel()
-            packed[row, :L] = x[batch_idx, idx]
-            attn[row, :L] = True
+    mask_tensor = torch.stack(
+        [torch.stack([normalize_mask(mask) for mask in masks], dim=0) for masks in batched_masks],
+        dim=0
+    )  # [B, nmasks, N]
 
-    return packed, attn
+    flat_masks = mask_tensor.reshape(-1, N)  # [B*nmasks, N]
+    lengths = flat_masks.sum(dim=1)  # [B*nmasks]
+    max_len = int(lengths.max().item()) if lengths.numel() > 0 else 0
+    if max_len == 0:
+        packed = x.new_zeros((B * num_masks, 0, D))
+        attn = torch.zeros((B * num_masks, 0), device=x.device, dtype=torch.bool)
+        return packed, attn
+
+    idx = torch.arange(N, device=x.device)
+    sort_keys = idx + (~flat_masks).to(idx.dtype) * N
+    idx_sorted = sort_keys.argsort(dim=1)
+
+    x_rep = x.repeat_interleave(num_masks, dim=0)
+    gather_idx = idx_sorted.unsqueeze(-1).expand(-1, -1, D)
+    packed_full = torch.gather(x_rep, 1, gather_idx)
+
+    arange = torch.arange(N, device=x.device)
+    attn_full = arange.unsqueeze(0) < lengths.unsqueeze(1)
+    packed_full = packed_full * attn_full.unsqueeze(-1)
+
+    return packed_full[:, :max_len], attn_full[:, :max_len]
 
 
 def repeat_interleave_batch(x, B, repeat):

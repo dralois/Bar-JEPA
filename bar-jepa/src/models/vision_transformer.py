@@ -48,19 +48,6 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     return emb
 
 
-def get_1d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
-    """
-    grid_size: int of the grid length
-    return:
-    pos_embed: [grid_size, embed_dim] or [1+grid_size, embed_dim] (w/ or w/o cls_token)
-    """
-    grid = np.arange(grid_size, dtype=float)
-    pos_embed = get_1d_sincos_pos_embed_from_grid(embed_dim, grid)
-    if cls_token:
-        pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
-    return pos_embed
-
-
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
     embed_dim: output dimension for each position
@@ -89,17 +76,21 @@ def interpolate_pos_encoding(x, pos_embed, grid_sizes):
     pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
     output = torch.zeros(B, N, D, device=x.device)
 
+    cache = {}
     for i in range(B):
         h, w = grid_sizes[i]
-        pos_embed_interp = nn.functional.interpolate(
-            pos_embed_2d,
-            size=(h, w),
-            mode='bicubic',
-            align_corners=False
-        )
-        # [1, D, h, w] -> [1, h*w, D]
-        pos_embed_interp = pos_embed_interp.permute(0, 2, 3, 1).reshape(1, h * w, D)
-        output[i, :h*w, :] = pos_embed_interp
+        key = (int(h), int(w))
+        if key not in cache:
+            pos_embed_interp = nn.functional.interpolate(
+                pos_embed_2d,
+                size=(h, w),
+                mode='bicubic',
+                align_corners=False
+            )
+            # [1, D, h, w] -> [1, h*w, D]
+            pos_embed_interp = pos_embed_interp.permute(0, 2, 3, 1).reshape(1, h * w, D)
+            cache[key] = pos_embed_interp
+        output[i, :h*w, :] = cache[key]
 
     return output
 
@@ -210,7 +201,6 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
-        C, H, W = x.shape
         # e.g. [3, 224, 224] -> [768, 14, 14] -> [768, 196] -> [196, 768] -> [1, 196, 768]
         x = self.proj(x).flatten(1).transpose(0, 1).unsqueeze(0)
         return x
@@ -289,12 +279,6 @@ class VisionTransformerPredictor(nn.Module):
 
     def forward(self, x, grids, masks_x, masks):
         assert (masks is not None) and (masks_x is not None), 'Cannot run predictor without mask indices'
-
-        if not isinstance(masks_x, list):
-            masks_x = [masks_x]
-
-        if not isinstance(masks, list):
-            masks = [masks]
 
         if len(masks_x) == 0 or len(masks) == 0:
             raise ValueError('masks_x and masks must be non-empty')
@@ -429,19 +413,15 @@ class VisionTransformer(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x, grids, masks=None):
-        if masks is not None:
-            if not isinstance(masks, list):
-                masks = [masks]
-
         # -- patchify x [B, C, W, H] -> [B, N, D]
         x = [self.patch_embed(curr) for curr in x]
         B, N, D = len(x), self.patch_embed.num_patches, self.embed_dim
 
         # -- Pad x to max_patches if needed
-        attention_mask = torch.ones(B, N, device=self.pos_embed.device).bool()
+        attention_mask = torch.ones(B, N, device=x[0].device).bool()
         for i, img in enumerate(x):
             if img.shape[1] < N:
-                padding = torch.zeros(1, N - img.shape[1], D, device=self.pos_embed.device)
+                padding = torch.zeros(1, N - img.shape[1], D, device=x[0].device)
                 x[i] = torch.cat([img, padding], dim=1)
                 attention_mask[i, -padding.shape[1]:] = 0
 
@@ -462,11 +442,9 @@ class VisionTransformer(nn.Module):
                 raise ValueError('masks batch size does not match inputs')
 
             x, attention_mask = pack_by_masks(x, masks)
-        else:
-            attention_mask = attention_mask
 
         # -- Forward through blocks
-        for i, blk in enumerate(self.blocks):
+        for blk in self.blocks:
             x = blk(x, attention_mask=attention_mask)
 
         if self.norm is not None:

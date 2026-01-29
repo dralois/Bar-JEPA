@@ -327,12 +327,14 @@ def main(args, resume_preempt=False):
                 masks_1 = [[u.to(device, non_blocking=True) for u in masks_enc[i]] for i in range(len(masks_enc))]
                 masks_2 = [[u.to(device, non_blocking=True) for u in masks_pred[i]] for i in range(len(masks_pred))]
                 return (imgs, grids, masks_1, masks_2)
-            imgs, grids, masks_enc, masks_pred = load_imgs()
-            def mask_count(mask):
-                return int(mask.sum().item()) if mask.dtype == torch.bool else int(mask.numel())
 
-            maskA_meter.update(mask_count(masks_enc[0][0]))
-            maskB_meter.update(mask_count(masks_pred[0][0]))
+            imgs, grids, masks_enc, masks_pred = load_imgs()
+
+            def max_mask_len(batched_masks):
+                return max(int(mask.sum().item()) for masks in batched_masks for mask in masks)
+
+            maskA_meter.update(max_mask_len(masks_enc))
+            maskB_meter.update(max_mask_len(masks_pred))
 
             def train_step():
                 _new_lr = scheduler.step()
@@ -342,7 +344,6 @@ def main(args, resume_preempt=False):
                 def forward_target():
                     with torch.no_grad():
                         h = target_encoder(imgs, grids)
-                        h = F.layer_norm(h, (h.size(-1),))  # normalize over feature-dim
                         B = len(h)
                         # -- create targets (masked regions of h)
                         h, _ = pack_by_masks(h, masks_pred)
@@ -392,11 +393,15 @@ def main(args, resume_preempt=False):
             time_meter.update(etime)
 
             # -- Logging
-            def log_stats():
+            def log_metrics():
                 csv_logger.log(epoch + 1, itr, loss, maskA_meter.val, maskB_meter.val, etime)
+
+                mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
+                    else torch.cuda.max_memory_allocated()) / 1024.**2
+
                 if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
                     logger.info('[%d, %5d] loss: %.3f '
-                                'masks: %.1f %.1f '
+                                'masks: %.1f %.1f (max %.1f %.1f) '
                                 '[wd: %.2e] [lr: %.2e] '
                                 '[mem: %.2e] '
                                 '(%.1f ms)'
@@ -404,9 +409,11 @@ def main(args, resume_preempt=False):
                                    loss_meter.avg,
                                    maskA_meter.avg,
                                    maskB_meter.avg,
+                                   maskA_meter.max,
+                                   maskB_meter.max,
                                    _new_wd,
                                    _new_lr,
-                                   torch.cuda.max_memory_allocated() / 1024.**2,
+                                   mem,
                                    time_meter.avg))
 
                     if grad_stats is not None:
@@ -417,20 +424,23 @@ def main(args, resume_preempt=False):
                                        grad_stats.min,
                                        grad_stats.max))
 
-            log_stats()
-
-            def log_wandb():
                 run.log({
                     "epoch": epoch + 1,
                     "train-loss": loss_meter.avg,
-                    "gpu-mem": torch.cuda.max_memory_allocated() / 1024.**2,
-                    "gradients/first-layer": grad_stats.first_layer,
-                    "gradients/last-layer": grad_stats.last_layer,
-                    "gradients/min": grad_stats.min,
-                    "gradients/max": grad_stats.max
+                    "gpu-mem": mem,
+                    "lr": _new_lr,
+                    "wd": _new_wd,
+                    "mask/enc_avg": maskA_meter.avg,
+                    "mask/enc_max": maskA_meter.max,
+                    "mask/pred_avg": maskB_meter.avg,
+                    "mask/pred_max": maskB_meter.max,
+                    "gradients/first-layer": None if grad_stats is None else grad_stats.first_layer,
+                    "gradients/last-layer": None if grad_stats is None else grad_stats.last_layer,
+                    "gradients/min": None if grad_stats is None else grad_stats.min,
+                    "gradients/max": None if grad_stats is None else grad_stats.max
                 })
 
-            log_wandb()
+            log_metrics()
 
             assert not np.isnan(loss), 'loss is nan'
 

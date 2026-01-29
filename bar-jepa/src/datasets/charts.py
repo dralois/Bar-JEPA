@@ -97,7 +97,7 @@ class Charts(torchvision.datasets.DatasetFolder):
         :param root: Root directory for dataset
         :param image_folder: Path to images inside root directory
         :param annotation_folder: Path to annotations inside root directory
-        :param train: whether to load train or test data
+        :param training: whether to load train or test data
         """
 
         suffix = 'train' if training else 'test'
