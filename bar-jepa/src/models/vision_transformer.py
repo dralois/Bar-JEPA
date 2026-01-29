@@ -15,7 +15,7 @@ import torch.nn as nn
 from src.utils.tensors import (
     trunc_normal_,
     repeat_interleave_batch,
-    apply_masks
+    pack_by_masks
 )
 
 
@@ -302,23 +302,11 @@ class VisionTransformerPredictor(nn.Module):
         if not isinstance(masks, list):
             masks = [masks]
 
-        def to_batch_first(mask_list, batch_size=None):
-            if len(mask_list) == 0:
-                return mask_list, batch_size
-            if isinstance(mask_list[0], torch.Tensor):
-                if mask_list[0].dim() >= 1 and (batch_size is None or mask_list[0].size(0) == batch_size):
-                    batch_size = mask_list[0].size(0)
-                    mask_list = [[mask_list[m][b] for m in range(len(mask_list))] for b in range(batch_size)]
-                else:
-                    batch_size = len(mask_list)
-                    mask_list = [[mask] for mask in mask_list]
-            else:
-                batch_size = len(mask_list) if batch_size is None else batch_size
-            return mask_list, batch_size
-
-        masks_x, B = to_batch_first(masks_x)
-        masks, B_pred = to_batch_first(masks, B)
-        if B_pred != B:
+        if len(masks_x) == 0 or len(masks) == 0:
+            raise ValueError('masks_x and masks must be non-empty')
+        if not isinstance(masks_x[0], list) or not isinstance(masks[0], list):
+            raise ValueError('masks_x and masks must be [B x nmasks] lists')
+        if len(masks_x) != len(masks):
             raise ValueError('masks_x and masks must have the same batch size')
 
         nenc = len(masks_x[0])
@@ -327,61 +315,39 @@ class VisionTransformerPredictor(nn.Module):
         # -- Context encoder embeddings [B*nenc, N, D-enc] to predictor [B*nenc, N, D-pred] embeddings
         x = self.predictor_embed(x)
 
-        # -- Batch Size
         B_ctx = len(masks_x)
-        B, N, D = x.size()
-        if B_ctx * nenc != B:
+        B_total, _, D = x.size()
+        if B_ctx * nenc != B_total:
             raise ValueError('masks_x does not match batch size of x')
 
-        # -- Create attention mask [B, N * 2] (for prediction tokens)
-        attention_mask = torch.ones(size=(B_ctx, N * 2), device=x.device).bool()
+        # -- add positional embedding to context tokens
+        pos_embed_full = self.interpolate_pos_encoding(
+            torch.zeros((B_ctx, self.max_patches, D), device=x.device),
+            self.predictor_pos_embed,
+            grids
+        )
+        pos_ctx, ctx_attn = pack_by_masks(pos_embed_full, masks_x)
+        x = x + pos_ctx
 
-        # -- Padding is attention masked
-        for i, (h, w) in enumerate(grids):
-            if h * w < N:
-                attention_mask[i, -(N - (h * w)):] = False
-
-        # -- Add position embeddings, depending on grid size of each image
-        grid_sizes = grids
-        if nenc > 1:
-            grid_sizes = [g for g in grids for _ in range(nenc)]
-        x_pos_embed = self.interpolate_pos_encoding(x, self.predictor_pos_embed, grid_sizes)
-        x = x + x_pos_embed
-
-        # -- Attention mask the context encoder outputs (union across context masks)
-        for batch_idx, encs in enumerate(masks_x):
-            current_mask = torch.zeros(size=(N,), device=x.device).bool()
-            for enc in encs:
-                current_mask[enc] = True
-            attention_mask[batch_idx][:self.max_patches] &= current_mask
-
-        # Also apply mask to embeddings
-        x = apply_masks(x, masks_x)
-        if nenc > 1:
-            attention_mask = attention_mask.repeat(nenc, 1)
+        L_ctx = x.size(1)
 
         # -- Create position embeddings for prediction tokens
-        pos_embs = self.predictor_pos_embed.repeat(B_ctx, 1, 1)
-        pos_embs = apply_masks(pos_embs, masks)
-        pos_embs = repeat_interleave_batch(pos_embs, B_ctx, repeat=nenc)
+        pos_pred, pred_attn = pack_by_masks(pos_embed_full, masks)
+        pos_pred = repeat_interleave_batch(pos_pred, B_ctx, repeat=nenc)
+        pred_attn = repeat_interleave_batch(pred_attn.unsqueeze(-1), B_ctx, repeat=nenc).squeeze(-1)
 
         # -- Create prediction tokens, add position embeddings
-        pred_tokens = self.mask_token.repeat(pos_embs.size(0), pos_embs.size(1), 1)
-        pred_tokens += pos_embs
+        pred_tokens = self.mask_token.repeat(pos_pred.size(0), pos_pred.size(1), 1)
+        pred_tokens += pos_pred
+        pred_tokens *= pred_attn.unsqueeze(-1)
 
-        attention_mask = attention_mask.repeat(npred, 1)
-
-        for mask_idx in range(npred):
-            for batch_idx, preds in enumerate(masks):
-                current_mask = torch.zeros(size=(N,), device=x.device).bool()
-                current_mask[preds[mask_idx]] = True
-                for enc_idx in range(nenc):
-                    row_idx = (mask_idx * (B_ctx * nenc)) + (batch_idx * nenc) + enc_idx
-                    attention_mask[row_idx][self.max_patches:] &= current_mask
-                    pred_tokens[row_idx] *= current_mask.unsqueeze(-1).repeat(1, D)
-
+        # -- Repeat context for each prediction mask
         x = x.repeat(npred, 1, 1)
+        ctx_attn = ctx_attn.repeat(npred, 1)
+
+        # -- Concatenate context and prediction tokens
         x = torch.cat([x, pred_tokens], dim=1)
+        attention_mask = torch.cat([ctx_attn, pred_attn], dim=1)
 
         # -- fwd prop
         for blk in self.predictor_blocks:
@@ -389,10 +355,11 @@ class VisionTransformerPredictor(nn.Module):
         x = self.predictor_norm(x)
 
         # -- return preds for mask tokens
-        x = x[:, self.max_patches:]
+        x = x * attention_mask.unsqueeze(-1)
+        x = x[:, L_ctx:]
         x = self.predictor_proj(x)
 
-        return (x * attention_mask[:,self.max_patches:].unsqueeze(-1))
+        return x
 
     def interpolate_pos_encoding(self, x, pos_embed, grid_sizes):
         B, N, D = x.shape
@@ -518,22 +485,14 @@ class VisionTransformer(nn.Module):
 
         # -- Mask x (if masks are provided)
         if masks is not None:
-            if isinstance(masks[0], torch.Tensor) and masks[0].dim() >= 1 and masks[0].size(0) == B:
-                num_masks = len(masks)
-                masks = [[masks[m][b] for m in range(num_masks)] for b in range(B)]
-            elif not isinstance(masks[0], list):
-                masks = [[mask] for mask in masks]
+            if len(masks) == 0 or not isinstance(masks[0], list):
+                raise ValueError('masks must be a non-empty [B x nmasks] list')
+            if len(masks) != B:
+                raise ValueError('masks batch size does not match inputs')
 
-            nenc = len(masks[0])
-            for batch_idx, encs in enumerate(masks):
-                current_mask = torch.zeros(N, dtype=torch.bool, device=self.pos_embed.device)
-                for enc in encs:
-                    current_mask[enc] = True
-                attention_mask[batch_idx] &= current_mask
-
-            x = apply_masks(x, masks)
-            if nenc > 1:
-                attention_mask = attention_mask.repeat(nenc, 1)
+            x, attention_mask = pack_by_masks(x, masks)
+        else:
+            attention_mask = attention_mask
 
         # -- Forward through blocks
         for i, blk in enumerate(self.blocks):

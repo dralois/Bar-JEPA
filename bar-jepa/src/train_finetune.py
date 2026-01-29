@@ -40,7 +40,7 @@ from src.utils.logging import (
     gpu_timer,
     grad_logger,
     AverageMeter)
-from src.utils.tensors import repeat_interleave_batch, apply_masks
+from src.utils.tensors import repeat_interleave_batch, pack_by_masks
 from src.datasets.charts import make_charts
 
 from src.helper import (
@@ -328,8 +328,11 @@ def main(args, resume_preempt=False):
                 masks_2 = [[u.to(device, non_blocking=True) for u in masks_pred[i]] for i in range(len(masks_pred))]
                 return (imgs, grids, masks_1, masks_2)
             imgs, grids, masks_enc, masks_pred = load_imgs()
-            maskA_meter.update(len(masks_enc[0][0]))
-            maskB_meter.update(len(masks_pred[0][0]))
+            def mask_count(mask):
+                return int(mask.sum().item()) if mask.dtype == torch.bool else int(mask.numel())
+
+            maskA_meter.update(mask_count(masks_enc[0][0]))
+            maskB_meter.update(mask_count(masks_pred[0][0]))
 
             def train_step():
                 _new_lr = scheduler.step()
@@ -342,7 +345,7 @@ def main(args, resume_preempt=False):
                         h = F.layer_norm(h, (h.size(-1),))  # normalize over feature-dim
                         B = len(h)
                         # -- create targets (masked regions of h)
-                        h = apply_masks(h, masks_pred)
+                        h, _ = pack_by_masks(h, masks_pred)
                         nenc = len(masks_enc[0]) if len(masks_enc) > 0 else 1
                         h = repeat_interleave_batch(h, B, repeat=nenc)
                         return h

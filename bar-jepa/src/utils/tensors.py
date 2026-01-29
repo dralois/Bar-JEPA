@@ -55,28 +55,15 @@ def apply_masks(x, batched_masks):
     Applies masks to a batch of input sequences.
 
     :param x: tensor of shape [B (batch-size), N (num-patches), D (feature-dim)]
-    :param batched_masks: list of masks, shape [B x [nmasks]] or [nmasks x B]
+    :param batched_masks: list of masks, shape [B x [nmasks]]
     :return: tensor of shape [B * nmasks, N, D], where masked patches are zeroed
     """
     if len(batched_masks) == 0:
         return x
 
     B = x.size(0)
-    if isinstance(batched_masks[0], torch.Tensor):
-        if batched_masks[0].dim() >= 1 and batched_masks[0].size(0) == B:
-            num_masks = len(batched_masks)
-            batched_masks = [[batched_masks[m][b] for m in range(num_masks)] for b in range(B)]
-        elif len(batched_masks) == B:
-            batched_masks = [[mask] for mask in batched_masks]
-        else:
-            raise ValueError('apply_masks expects masks as [B x nmasks] or [nmasks x B]')
-
     if len(batched_masks) != B:
-        if len(batched_masks[0]) == B:
-            num_masks = len(batched_masks)
-            batched_masks = [[batched_masks[m][b] for m in range(num_masks)] for b in range(B)]
-        else:
-            raise ValueError('apply_masks expects masks as [B x nmasks] or [nmasks x B]')
+        raise ValueError('apply_masks expects masks as [B x nmasks]')
 
     N = x.size(1)
     all_x = []
@@ -85,18 +72,70 @@ def apply_masks(x, batched_masks):
         m_val = torch.zeros((B, N), dtype=torch.bool, device=x.device)
         for batch_idx in range(B):
             mask = batched_masks[batch_idx][mask_idx]
-            if mask.dtype == torch.bool:
-                mask = mask.view(-1)
-                if mask.numel() != N:
-                    mask = mask[:N]
-                m_val[batch_idx] |= mask
-            else:
-                m_idx = mask.view(-1)
-                if m_idx.numel() > 0:
-                    m_val[batch_idx, m_idx] = True
+            if mask.dtype != torch.bool:
+                raise ValueError('apply_masks expects boolean masks')
+            mask = mask.view(-1)
+            if mask.numel() < N:
+                pad = mask.new_zeros(N - mask.numel())
+                mask = torch.cat([mask, pad], dim=0)
+            elif mask.numel() > N:
+                mask = mask[:N]
+            m_val[batch_idx] |= mask
         all_x.append(x * m_val.unsqueeze(-1))
 
     return torch.cat(all_x, dim=0)
+
+
+def pack_by_masks(x, batched_masks):
+    """
+    Packs masked tokens into a padded batch.
+
+    :param x: tensor of shape [B (batch-size), N (num-patches), D (feature-dim)]
+    :param batched_masks: list of masks, shape [B x [nmasks]]
+    :return: tuple of:
+        - packed tensor of shape [B * nmasks, L_max, D]
+        - attention mask of shape [B * nmasks, L_max] (True for real tokens)
+    """
+    if len(batched_masks) == 0:
+        return x, torch.ones(x.size(0), x.size(1), device=x.device, dtype=torch.bool)
+
+    B, N, D = x.size()
+    if len(batched_masks) != B:
+        raise ValueError('pack_by_masks expects masks as [B x nmasks]')
+
+    num_masks = len(batched_masks[0])
+    indices_per_mask = []
+    max_len = 0
+    for mask_idx in range(num_masks):
+        idx_list = []
+        for batch_idx in range(B):
+            mask = batched_masks[batch_idx][mask_idx]
+            if mask.dtype != torch.bool:
+                raise ValueError('pack_by_masks expects boolean masks')
+            mask = mask.view(-1)
+            if mask.numel() < N:
+                pad = mask.new_zeros(N - mask.numel())
+                mask = torch.cat([mask, pad], dim=0)
+            elif mask.numel() > N:
+                mask = mask[:N]
+            idx = torch.nonzero(mask, as_tuple=False).squeeze(1)
+            idx_list.append(idx)
+            max_len = max(max_len, idx.numel())
+        indices_per_mask.append(idx_list)
+
+    packed = x.new_zeros((B * num_masks, max_len, D))
+    attn = torch.zeros((B * num_masks, max_len), device=x.device, dtype=torch.bool)
+
+    for mask_idx, idx_list in enumerate(indices_per_mask):
+        for batch_idx, idx in enumerate(idx_list):
+            row = mask_idx * B + batch_idx
+            if idx.numel() == 0:
+                continue
+            L = idx.numel()
+            packed[row, :L] = x[batch_idx, idx]
+            attn[row, :L] = True
+
+    return packed, attn
 
 
 def repeat_interleave_batch(x, B, repeat):

@@ -122,6 +122,25 @@ class MaskCollator(object):
         # --
         return mask, mask_complement
 
+    def _indices_to_bool_mask(self, indices, grid_size):
+        """
+        Converts patch indices to a boolean mask of length max_patches.
+
+        :param indices: 1D tensor with patch indices to keep
+        :param grid_size: tuple (h, w) for current patch grid
+        :return: boolean mask of shape [max_patches], True = keep
+        """
+        grid_h, grid_w = grid_size
+        num_patches = grid_h * grid_w
+
+        mask = torch.zeros(self.patch_count, dtype=torch.bool)
+        if indices.numel() > 0:
+            mask[indices.view(-1).long()] = True
+        # Padding is always masked
+        if num_patches < self.patch_count:
+            mask[num_patches:] = False
+        return mask
+
     def __call__(self, batch):
         '''
         Create encoder and predictor masks when collating imgs into a batch
@@ -140,8 +159,6 @@ class MaskCollator(object):
         g.manual_seed(seed)
 
         collated_masks_pred, collated_masks_enc = [], []
-        min_keep_pred = float('inf')
-        min_keep_enc = float('inf')
 
         for i, (img, _) in enumerate(batch):
             # B, C, W, H
@@ -164,9 +181,8 @@ class MaskCollator(object):
             masks_p, masks_C = [], []
             for _ in range(self.npred):
                 mask, mask_C = self._sample_block_mask(img_s, p_size)
-                masks_p.append(mask)
+                masks_p.append(self._indices_to_bool_mask(mask, img_s))
                 masks_C.append(mask_C)
-                min_keep_pred = min(min_keep_pred, len(mask))
             collated_masks_pred.append(masks_p)
 
             acceptable_regions = masks_C
@@ -180,15 +196,7 @@ class MaskCollator(object):
             masks_e = []
             for _ in range(self.nenc):
                 mask, mask_C = self._sample_block_mask(img_s, e_size, acceptable_regions=acceptable_regions)
-                masks_e.append(mask)
-                min_keep_enc = min(min_keep_enc, len(mask))
+                masks_e.append(self._indices_to_bool_mask(mask, img_s))
             collated_masks_enc.append(masks_e)
 
-        # When not preserving aspect ratio, all masks have the same number of patches
-        if not self.preserve_aspect_ratio:
-            # [B [npred / nenc]]
-            collated_masks_pred = [[cm[:min_keep_pred] for cm in cm_list] for cm_list in collated_masks_pred]
-            collated_masks_enc = [[cm[:min_keep_enc] for cm in cm_list] for cm_list in collated_masks_enc]
-
         return collated_batch, collated_masks_enc, collated_masks_pred
-
