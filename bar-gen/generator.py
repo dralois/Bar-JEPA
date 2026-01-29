@@ -25,9 +25,10 @@ from tqdm import tqdm
 
 ### random bar chart configuration ###
 bar_direction_list = ["vertical"]
-bar_per_loc_list = [1]  # how many bars are there in one ordinal position
-bar_num_min = 5
-bar_num_max = 5
+# how many bars are there in one ordinal position (series per category)
+bar_per_loc_list = [2, 3, 4, 5]
+bar_num_min = 1
+bar_num_max = 3
 bar_value_min = 10
 bar_value_max = 200
 bar_width_min = 0.4
@@ -39,7 +40,7 @@ axis_label_length_max = 15
 axis_label_size_min = 15
 axis_label_size_max = 18
 
-legend_allowed = False
+legend_allowed = True
 legend_position = ["top", "right", "bottom"]
 legend_length_min = 3
 legend_length_max = 6
@@ -65,11 +66,110 @@ title_location = ["left", "center", "right"]
 
 
 def test_latin_font(font):
+    """
+    Returns True if the font looks like a Latin/roman font and has basic ASCII glyphs.
+
+    :param font: Path to font file
+    :return: Whether the font is acceptable
+    """
     try:
+        font_name = font_manager.FontProperties(fname=font).get_name().lower()
+        banned_keywords = [
+            "symbol", "symbols", "wingdings", "webdings", "dingbat",
+            "emoji", "pictograph", "icon", "math",
+            "cjk", "han", "hans", "hant", "kana", "hiragana", "katakana",
+            "hangul", "korean", "japanese", "chinese",
+            "thai", "arabic", "hebrew", "devanagari", "greek", "tamil",
+        ]
+        if any(k in font_name for k in banned_keywords):
+            return False
+
         curr = font_manager.get_font(font)
-        return curr.get_charmap().get(ord("a")) is not None
-    except:
+        required = string.ascii_letters + string.digits + " .,:;!?()-"
+        # Ensure glyph indices exist
+        return all(curr.get_char_index(ord(ch)) != 0 for ch in required)
+    except Exception:
         return False
+
+
+def _relative_luminance(rgb):
+    """
+    Computes relative luminance for an RGB(A) color in 0..1.
+
+    :param rgb: RGB or RGBA iterable
+    :return: Relative luminance
+    """
+    # rgb in 0..1
+    def to_linear(c):
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (to_linear(c) for c in rgb[:3])
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast_ratio(fg_rgb, bg_rgb):
+    """
+    Computes contrast ratio between two RGB(A) colors.
+
+    :param fg_rgb: Foreground RGB or RGBA iterable
+    :param bg_rgb: Background RGB or RGBA iterable
+    :return: Contrast ratio (>= 1.0)
+    """
+    l1 = _relative_luminance(fg_rgb)
+    l2 = _relative_luminance(bg_rgb)
+    lighter, darker = (l1, l2) if l1 >= l2 else (l2, l1)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _rgb_distance(a, b):
+    """
+    Computes Euclidean distance between two RGB(A) colors.
+
+    :param a: RGB or RGBA iterable
+    :param b: RGB or RGBA iterable
+    :return: Distance in RGB space
+    """
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+
+
+def pick_contrasty_colors(
+    cmap,
+    count,
+    bg_rgb,
+    min_ratio=1.5,
+    min_lum_diff=0.2,
+    min_color_dist=0.25,
+    max_tries=200,
+):
+    """
+    Picks colors from a colormap that contrast with background and each other.
+
+    :param cmap: Matplotlib colormap instance
+    :param count: Number of colors to return
+    :param bg_rgb: Background RGB or RGBA iterable
+    :param min_ratio: Minimum contrast ratio vs background
+    :param min_lum_diff: Minimum luminance difference vs background
+    :param min_color_dist: Minimum RGB distance between colors
+    :param max_tries: Maximum random samples before fallback
+    :return: List of RGBA colors
+    """
+    colors = []
+    tries = 0
+    bg_lum = _relative_luminance(bg_rgb)
+    while len(colors) < count and tries < max_tries:
+        tries += 1
+        color = cmap(random.random())
+        lum_diff = abs(_relative_luminance(color) - bg_lum)
+        if _contrast_ratio(color, bg_rgb) < min_ratio or lum_diff < min_lum_diff:
+            continue
+        if any(_rgb_distance(color, c) < min_color_dist for c in colors):
+            continue
+        colors.append(color)
+    if len(colors) < count:
+        # fallback to a higher-contrast colormap sample
+        fallback = plt.colormaps["tab10"]
+        colors.extend([fallback(i % 10) for i in range(count - len(colors))])
+    return colors
 
 
 fonts_list = list(filter(test_latin_font, font_manager.findSystemFonts()))
@@ -108,11 +208,14 @@ def generate_random_samples(
         scale = random.uniform(1, 20)
         values = np.random.exponential(scale, size=sample_shape)
 
-    # Normalize to [0, 1]
-    mean = np.mean(values)
-    norm = (values - mean) / np.linalg.norm(values - mean)
+    v_min = np.min(values)
+    v_max = np.max(values)
+    denom = v_max - v_min if v_max != v_min else 1.0
+    norm = (values - v_min) / denom
 
-    return norm if allow_negative else np.abs(norm)
+    if allow_negative:
+        return norm * 2 - 1
+    return norm
 
 
 def get_random_plot(filename):
@@ -181,7 +284,9 @@ def get_random_plot(filename):
         get_vticklabels = ax.get_yticklabels
         get_vticklines = ax.get_yticklines
 
-    colors = plt.colormaps[random.choice(list(plt.colormaps))](np.random.rand(bar_per_loc))
+    bg_color = ax.get_facecolor()
+    cmap = plt.colormaps[random.choice(list(plt.colormaps))]
+    colors = pick_contrasty_colors(cmap, bar_per_loc, bg_color)
     linewidth = random.choice([0, 1])
     for i in range(bar_per_loc):
         temp = bar_generator(x + bar_width * i, y[i], bar_width, align="edge", color=colors[i], # type: ignore
@@ -205,21 +310,21 @@ def get_random_plot(filename):
     letter_weights[-1] = int(len(letter_weights) * 0.2)
     letter_weights = list(itertools.accumulate(letter_weights))
     letters = string.ascii_letters + " "
-    title_length = random.choice(range(title_length_min, title_length_max))
+    title_length = random.choice(range(title_length_min, title_length_max + 1))
     title_text = "".join(random.choices(letters, cum_weights=letter_weights, k=title_length)).strip()
-    xlabel_length = random.choice(range(axis_label_length_min, axis_label_length_max))
+    xlabel_length = random.choice(range(axis_label_length_min, axis_label_length_max + 1))
     xlabel = "".join(random.choices(letters, cum_weights=letter_weights, k=xlabel_length)).strip()
-    ylabel_length = random.choice(range(axis_label_length_min, axis_label_length_max))
+    ylabel_length = random.choice(range(axis_label_length_min, axis_label_length_max + 1))
     ylabel = "".join(random.choices(letters, cum_weights=letter_weights, k=ylabel_length)).strip()
 
     ticks_label = []
     for i in range(bar_num):
-        ticks_label_length = random.choice(range(ticks_label_length_min, ticks_label_length_max))
+        ticks_label_length = random.choice(range(ticks_label_length_min, ticks_label_length_max + 1))
         ticks_label.append("".join(random.choices(string.ascii_letters, k=ticks_label_length)).strip())
 
     legend_char = []
     for i in range(bar_per_loc):
-        legend_length = random.choice(range(legend_length_min, legend_length_max))
+        legend_length = random.choice(range(legend_length_min, legend_length_max + 1))
         legend_char.append("".join(random.choices(letters, k=legend_length)).strip())
 
     data = (x, y, ticks_label, legend_char)
