@@ -386,10 +386,12 @@ def main(args, resume_preempt=False):
                             sigma=hm_sigma
                         )
                         l_hm += F.mse_loss(p_hm[i], gt_hm)
+                    else:
+                        l_hm.detach()
 
                 # Apply scaling factors
-                l_org /= 5.
-                l_hm /= 1.0
+                l_org /= 1.
+                l_hm /= 1.
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
