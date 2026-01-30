@@ -4,16 +4,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/submit_viscom.sh --preset arp
-  scripts/submit_viscom.sh --preset noarp
-  scripts/submit_viscom.sh --preset simple
-  scripts/submit_viscom.sh --preset vanilla
-  scripts/submit_viscom.sh --preset arp --gpus 6000:2
+  scripts/submit_viscom.sh --preset arp [--gpus 4090:2]
 EOF
 }
 
-PRESET=""
-GPUS="6000:1"
+PRESET="arp"
+GPUS="4090:2"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,6 +49,7 @@ for ((i=0; i<GPU_COUNT; i++)); do
 done
 
 COMMAND="whereis python && python ./bar-jepa/main.py --mode decoder --fname ./bar-jepa/configs/keypoint/$CONFIG --devices $DEVICES"
+echo "Submitting preset '$PRESET' with config ./bar-jepa/configs/keypoint/$CONFIG and GPUs $GPUS"
 
 submit "$COMMAND" \
   --custom dralois/ijepa-decoder:latest \
