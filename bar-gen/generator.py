@@ -26,9 +26,9 @@ from tqdm import tqdm
 ### random bar chart configuration ###
 bar_direction_list = ["vertical"]
 # how many bars are there in one ordinal position (series per category)
-bar_per_loc_list = [2, 3, 4, 5]
-bar_num_min = 1
-bar_num_max = 3
+bar_per_loc_list = [1, 2, 3]
+bar_num_min = 2
+bar_num_max = 5
 bar_value_min = 10
 bar_value_max = 200
 bar_width_min = 0.4

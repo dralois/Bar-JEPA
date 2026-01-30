@@ -182,7 +182,7 @@ def init_decoder_model(
     model_name='vit_base',
     patch_size=16,
     crop_size=224,
-    max_keypoints=64,
+    num_hm_slots=64,
     decoder_type='simple'
 ):
     max_patches = (crop_size // patch_size) ** 2
@@ -192,7 +192,7 @@ def init_decoder_model(
     decoder = KeypointDetector(
         max_patches=max_patches,
         in_channels=encoder.num_features,
-        num_keypoints=max_keypoints,
+        num_hm_slots=num_hm_slots,
         num_classes=3,
         decoder_type=decoder_type)
 

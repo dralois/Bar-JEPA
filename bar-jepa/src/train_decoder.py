@@ -23,31 +23,31 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
+from src.datasets.charts import make_charts
+from src.transforms import make_transforms
+from src.masks.charts import ChartsCollator
+
 from src.utils.distributed import (
     init_distributed,
-    AllReduce)
+    AllReduce
+)
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
-    keypoint_sets,
-    f1
+    build_slot_heatmaps
 )
 
 from src.utils.logging import (
     CSVLogger,
     gpu_timer,
-    AverageMeter)
-
-from src.datasets.charts import make_charts
-
-from src.masks.charts import ChartsCollator
+    AverageMeter
+)
 
 from src.helper import (
     load_decoder_checkpoint,
     init_decoder_model,
-    init_decoder_opt)
-
-from src.transforms import make_transforms
+    init_decoder_opt
+)
 
 # --
 log_timings = True
@@ -91,13 +91,11 @@ def main(args, resume_preempt=False):
     patch_count = int((crop_size // patch_size) ** 2.)
 
     # -- KEYPOINT DETECTION
-    max_keypoints = args['keypoint']['max_keypoints']
-    pnt_thresh = args['keypoint']['pnt_detect_thresh']
-    cls_thresh = args['keypoint']['cls_conf_thresh']
-    eval_thresh = args['keypoint']['eval_thresh']
+    use_hm_loss = args['keypoint']['use_hm_loss']
+    num_hm_slots = args['keypoint']['hm_slots']
+    num_tick_slots = args['keypoint']['tick_slots']
+    hm_sigma = args['keypoint']['hm_sigma']
     cls_weights = args['keypoint']['class_weights']
-    use_pts_loss = args['keypoint']['use_pts_loss']
-    use_align_loss = args['keypoint']['use_align_loss']
 
     # -- OPTIMIZATION
     ipe_scale = args['optimization']['ipe_scale']
@@ -178,7 +176,7 @@ def main(args, resume_preempt=False):
         model_name=model_name,
         patch_size=patch_size,
         crop_size=crop_size,
-        max_keypoints=max_keypoints,
+        num_hm_slots=num_hm_slots,
         decoder_type=decoder_type)
 
     # -- make data transforms
@@ -251,7 +249,7 @@ def main(args, resume_preempt=False):
             scheduler.step()
             wd_scheduler.step()
 
-    # Class weights: [None, bar, tick]
+    # Class weights: [background, bar, tick]
     cls_weights = torch.tensor(cls_weights).to(device)
 
     # Initialize wandb
@@ -280,8 +278,7 @@ def main(args, resume_preempt=False):
         org_loss_train_m, org_loss_val_m = AverageMeter(), AverageMeter()
         cls_loss_train_m, cls_loss_val_m = AverageMeter(), AverageMeter()
         reg_loss_train_m, reg_loss_val_m = AverageMeter(), AverageMeter()
-        pts_loss_train_m, pts_loss_val_m = AverageMeter(), AverageMeter()
-        alg_loss_train_m, alg_loss_val_m = AverageMeter(), AverageMeter()
+        hm_loss_train_m, hm_loss_val_m = AverageMeter(), AverageMeter()
         time_meter, loss_time = AverageMeter(), AverageMeter()
 
         def save_checkpoint(best, lr, wd):
@@ -304,22 +301,14 @@ def main(args, resume_preempt=False):
                 if (epoch + 1) % checkpoint_freq == 0:
                     torch.save(save_dict, save_path.format(epoch=f'{epoch + 1}'))
 
-        def load_charts(data, targets):
-            gt_orgs, gt_cls, gt_reg = targets
-            imgs = [img.to(device, non_blocking=True) for img in data]
-            grids = [(img.shape[1] // patch_size, img.shape[2] // patch_size) for img in imgs]
-            gt_orgs = [gt.to(device, non_blocking=True) for gt in gt_orgs]
-            gt_cls = [gt.to(device, non_blocking=True) for gt in gt_cls]
-            gt_reg = [gt.to(device, non_blocking=True) for gt in gt_reg]
-            return (imgs, grids, gt_orgs, gt_cls, gt_reg)
-
-        def log_stats(itr, loss, lr, wd, etime, train):
+        def log_metrics(itr, loss, lr, wd, etime, train):
             csv_logger.log(epoch + 1, itr, loss, etime)
             mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
                    else torch.cuda.max_memory_allocated()) / 1024.**2
+            # Console
             if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
                 logger.info('%s:\t[%d, %5d] loss: %.3f '
-                            '[%.3f + %.3f + %.3f + %.3f + %.3f] '
+                            '[%.3f + %.3f + %.3f + %.3f] '
                             '[mem: %.2e, lr: %.2e, wd: %.2e] '
                             '(%.1f | %.1f ms)'
                             % ('Train' if train else 'Val', epoch + 1, itr,
@@ -327,14 +316,10 @@ def main(args, resume_preempt=False):
                                 org_loss_train_m.avg if train else org_loss_val_m.avg,
                                 cls_loss_train_m.avg if train else cls_loss_val_m.avg,
                                 reg_loss_train_m.avg if train else reg_loss_val_m.avg,
-                                pts_loss_train_m.avg if train else pts_loss_val_m.avg,
-                                alg_loss_train_m.avg if train else alg_loss_val_m.avg,
+                                hm_loss_train_m.avg if train else hm_loss_val_m.avg,
                                 mem, lr, wd,
                                 time_meter.avg, loss_time.avg))
-
-        def log_wandb(lr, wd, train):
-            mem = (torch.mps.driver_allocated_memory() if device.type == 'mps'
-                   else torch.cuda.max_memory_allocated()) / 1024.**2
+            # Wandb
             run.log({
                 'epoch': epoch + 1,
                 'time': time.time() - start_time,
@@ -342,8 +327,7 @@ def main(args, resume_preempt=False):
                 f'loss-{"train" if train else "val"}/origin': org_loss_train_m.avg if train else org_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/classification': cls_loss_train_m.avg if train else cls_loss_val_m.avg,
                 f'loss-{"train" if train else "val"}/regression': reg_loss_train_m.avg if train else reg_loss_val_m.avg,
-                f'loss-{"train" if train else "val"}/points': pts_loss_train_m.avg if train else pts_loss_val_m.avg,
-                f'loss-{"train" if train else "val"}/align': alg_loss_train_m.avg if train else alg_loss_val_m.avg,
+                f'loss-{"train" if train else "val"}/heatmap': hm_loss_train_m.avg if train else hm_loss_val_m.avg,
                 'gpu-mem': mem,
                 'lr': lr,
                 'wd': wd
@@ -358,19 +342,14 @@ def main(args, resume_preempt=False):
                 # Charts -> Embeddings
                 h = encoder(imgs, grids)
                 # Embeddings -> Predictions
-                p_cls, p_reg, p_kps = decoder(h, grids)
-                return p_cls, p_reg, p_kps
+                p_cls, p_reg, p_hm = decoder(h, grids)
+                return p_cls, p_reg, p_hm
 
-            def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_kps):
+            def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_hm):
                 l_org = torch.tensor(0., device=device)
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
-                l_pts = torch.tensor(0., device=device)
-                l_pts_dist = torch.tensor(0., device=device)
-                l_pts_missing = torch.tensor(0., device=device)
-                l_pts_claim = torch.tensor(0., device=device)
-                l_pts_bg = torch.tensor(0., device=device)
-                l_align = torch.tensor(0., device=device)
+                l_hm = torch.tensor(0., device=device)
                 sizes = torch.tensor([c.shape for c in gt_cls], device=device)
 
                 # For each chart in batch individually
@@ -379,7 +358,7 @@ def main(args, resume_preempt=False):
                     l_cls += F.cross_entropy(
                         p_cls[i][:3].unsqueeze(0),
                         gt_cls[i].unsqueeze(0),
-                        weight=cls_weights, reduction='mean')
+                        weight=cls_weights)
                     l_org += F.binary_cross_entropy_with_logits(
                         p_cls[i][3],
                         gt_orgs[i]
@@ -395,53 +374,24 @@ def main(args, resume_preempt=False):
                         gt_orgs[i], gt_cls[i], gt_reg[i], sizes[i]
                     )
 
-                    # Keypoint coordinates & probabilities
-                    kp_coords = p_kps[i][:, :2]
-                    kp_logits = p_kps[i][:, 2:]
-
-                    # Origin coordinate loss
-                    origin_probs = torch.sigmoid(kp_logits[:, 3])
-                    origin_weights = origin_probs / (origin_probs.sum() + 1e-8)
-                    p_org = (origin_weights.unsqueeze(1) * kp_coords).sum(dim=0)
-                    l_org += F.l1_loss(p_org, gt_org.squeeze(0))
-
-                    # Entropy regularization (encourage one-hot selection)
-                    if origin_probs.sum() > 1e-3:
-                        l_org += 0.1 * (-(origin_weights * torch.log(origin_weights + 1e-8)).sum())
-
-                    if use_pts_loss:
-                        dist_bar, missing_bar, claim_bar, bg_bar = keypoint_sets(
-                            gt_bars,
-                            kp_coords,
-                            kp_logits,
-                            1)
-                        dist_tick, missing_tick, claim_tick, bg_tick = keypoint_sets(
+                    # Heatmap loss (MSRA targets as in ViTPose)
+                    if use_hm_loss:
+                        gt_hm = build_slot_heatmaps(
+                            gt_org,
                             gt_ticks,
-                            kp_coords,
-                            kp_logits,
-                            2)
-                        l_pts_dist += dist_tick + dist_bar
-                        l_pts_missing += missing_tick + missing_bar
-                        l_pts_claim += claim_tick + claim_bar
-                        l_pts_bg += bg_tick + bg_bar
-
-                    if use_align_loss:
-                        tick_mask = torch.softmax(kp_logits[:, 2], dim=1) > 0.5
-                        if tick_mask.sum() > 1:
-                            tick_x = kp_coords[tick_mask, 1]
-                            l_align += tick_x.var(unbiased=False) \
-                                    + (tick_x.mean() - p_org[1]).abs()
-
-                if use_pts_loss:
-                    logger.info('Loss pts:\t[%.3f + %.3f + %.3f + %.3f]',
-                                l_pts_dist, l_pts_missing, l_pts_claim, l_pts_bg)
+                            gt_bars,
+                            sizes[i],
+                            num_hm_slots=num_hm_slots,
+                            num_tick_slots=num_tick_slots,
+                            sigma=hm_sigma
+                        )
+                        l_hm += F.mse_loss(p_hm[i], gt_hm)
 
                 # Apply scaling factors
                 l_org /= 5.
-                l_pts = (l_pts_dist + l_pts_missing + l_pts_claim + l_pts_bg) / 10.
-                l_align /= 1000.
+                l_hm /= 1.0
 
-                loss: torch.Tensor = l_org + l_cls + l_reg + l_pts + l_align
+                loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
 
                 return loss, (
@@ -449,22 +399,21 @@ def main(args, resume_preempt=False):
                     l_org.item(),
                     l_cls.item(),
                     l_reg.item(),
-                    l_pts.item(),
-                    l_align.item()
+                    l_hm.item()
                 )
 
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                 if decoder.training:
-                    p_cls, p_reg, p_kps = forward()
+                    p_cls, p_reg, p_hm = forward()
                     loss_start = time.time()
-                    loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_kps)
+                    loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_hm)
                     loss_end = time.time()
                     loss_time.update(loss_end-loss_start)
                 else:
                     with torch.no_grad():
-                        p_cls, p_reg, p_kps = forward()
-                        loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_kps)
+                        p_cls, p_reg, p_hm = forward()
+                        loss, all_losses = loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_hm)
 
             # Backward & step
             if decoder.training:
@@ -479,19 +428,16 @@ def main(args, resume_preempt=False):
 
             return (all_losses, lr, wd)
 
-        def update_meters(losses, train):
-            loss, l_org, l_cls, l_reg, l_pts, l_alg = losses
-            (loss_train_m if train else loss_val_m).update(loss)
-            (org_loss_train_m if train else org_loss_val_m).update(l_org)
-            (cls_loss_train_m if train else cls_loss_val_m).update(l_cls)
-            (reg_loss_train_m if train else reg_loss_val_m).update(l_reg)
-            (pts_loss_train_m if train else pts_loss_val_m).update(l_pts)
-            (alg_loss_train_m if train else alg_loss_val_m).update(l_alg)
-            return loss
-
         def iteration_wrapper(itr, data, targets, train):
-            imgs, grids, gt_orgs, gt_cls, gt_reg = load_charts(data, targets)
+            # Load charts and ground truth
+            gt_orgs, gt_cls, gt_reg = targets
+            imgs = [img.to(device, non_blocking=True) for img in data]
+            grids = [(img.shape[1] // patch_size, img.shape[2] // patch_size) for img in imgs]
+            gt_orgs = [gt.to(device, non_blocking=True) for gt in gt_orgs]
+            gt_cls = [gt.to(device, non_blocking=True) for gt in gt_cls]
+            gt_reg = [gt.to(device, non_blocking=True) for gt in gt_reg]
 
+            # Step
             (losses, lr, wd), etime = gpu_timer(
                 step,
                 imgs=imgs,
@@ -501,12 +447,17 @@ def main(args, resume_preempt=False):
                 gt_reg=gt_reg
             )
 
-            loss = update_meters(losses, train)
+            # Update meters
+            loss, l_org, l_cls, l_reg, l_hm = losses
+            (loss_train_m if train else loss_val_m).update(loss)
+            (org_loss_train_m if train else org_loss_val_m).update(l_org)
+            (cls_loss_train_m if train else cls_loss_val_m).update(l_cls)
+            (reg_loss_train_m if train else reg_loss_val_m).update(l_reg)
+            (hm_loss_train_m if train else hm_loss_val_m).update(l_hm)
             time_meter.update(etime)
 
-            log_stats(itr, loss, lr, wd, etime, train)
-            log_wandb(lr, wd, train)
-
+            # Tracking
+            log_metrics(itr, loss, lr, wd, etime, train)
             return lr, wd
 
         # Train loop

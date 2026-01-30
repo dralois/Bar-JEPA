@@ -60,23 +60,11 @@ def pack_by_masks(x, batched_masks):
         - packed tensor of shape [B * nmasks, L_max, D]
         - attention mask of shape [B * nmasks, L_max] (True for real tokens)
     """
-    if len(batched_masks) == 0:
-        return x, torch.ones(x.size(0), x.size(1), device=x.device, dtype=torch.bool)
-
     B, N, D = x.size()
-    if len(batched_masks) != B:
-        raise ValueError('pack_by_masks expects masks as [B x nmasks]')
-
     num_masks = len(batched_masks[0])
-    if num_masks == 0:
-        return x.new_zeros((0, 0, D)), torch.zeros((0, 0), device=x.device, dtype=torch.bool)
-    for masks in batched_masks:
-        if len(masks) != num_masks:
-            raise ValueError('pack_by_masks expects a consistent number of masks per batch')
 
     def normalize_mask(mask):
-        if mask.dtype != torch.bool:
-            raise ValueError('pack_by_masks expects boolean masks')
+        # Ensure each mask is of length N (pad or truncate).
         mask = mask.to(device=x.device).view(-1)
         if mask.numel() < N:
             pad = mask.new_zeros(N - mask.numel())
@@ -85,27 +73,28 @@ def pack_by_masks(x, batched_masks):
             mask = mask[:N]
         return mask
 
+    # Build mask tensor -> [B, nmasks, N]
     mask_tensor = torch.stack(
         [torch.stack([normalize_mask(mask) for mask in masks], dim=0) for masks in batched_masks],
         dim=0
-    )  # [B, nmasks, N]
+    )
 
-    flat_masks = mask_tensor.reshape(-1, N)  # [B*nmasks, N]
-    lengths = flat_masks.sum(dim=1)  # [B*nmasks]
-    max_len = int(lengths.max().item()) if lengths.numel() > 0 else 0
-    if max_len == 0:
-        packed = x.new_zeros((B * num_masks, 0, D))
-        attn = torch.zeros((B * num_masks, 0), device=x.device, dtype=torch.bool)
-        return packed, attn
+    # Flatten -> [nmasks*B, N] and calculate valid lengths
+    flat_masks = mask_tensor.permute(1, 0, 2).reshape(-1, N)
+    lengths = flat_masks.sum(dim=1)
+    max_len = int(lengths.max().item())
 
+    # Sort so true entries are first, preserving original order
     idx = torch.arange(N, device=x.device)
     sort_keys = idx + (~flat_masks).to(idx.dtype) * N
     idx_sorted = sort_keys.argsort(dim=1)
 
-    x_rep = x.repeat_interleave(num_masks, dim=0)
+    # Gather (valid) tokens -> [B*num_masks, N, D]
+    x_rep = x.repeat(num_masks, 1, 1)
     gather_idx = idx_sorted.unsqueeze(-1).expand(-1, -1, D)
     packed_full = torch.gather(x_rep, 1, gather_idx)
 
+    # Create and apply attention mask (excludes for padding)
     arange = torch.arange(N, device=x.device)
     attn_full = arange.unsqueeze(0) < lengths.unsqueeze(1)
     packed_full = packed_full * attn_full.unsqueeze(-1)

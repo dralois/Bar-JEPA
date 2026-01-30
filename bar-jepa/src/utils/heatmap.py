@@ -53,6 +53,108 @@ def cls_pts_to_maps(
     return org_map, cls_map, reg_map
 
 
+def build_slot_heatmaps(
+    origin: torch.Tensor,
+    ticks: torch.Tensor,
+    bars: torch.Tensor,
+    mapsize: torch.Tensor,
+    num_hm_slots: int,
+    num_tick_slots: int = 15,
+    sigma: float = 2.0
+) -> torch.Tensor:
+    """
+    Builds slot-based heatmaps for origin, ticks, and bars.
+
+    Slot layout:
+    - 0: origin
+    - [1, num_tick_slots]: ticks (sorted bottom->top)
+    - [num_tick_slots + 1, num_hm_slots]: bars (sorted left->right)
+
+    :param origin: origin points, shape [1, 2] (normalized [y, x])
+    :param ticks: tick points, shape [T, 2] (normalized [y, x])
+    :param bars: bar points, shape [B, 2] (normalized [y, x])
+    :param mapsize: map size, shape [2] (H, W)
+    :param num_hm_slots: total number of slots (K)
+    :param num_tick_slots: number of tick slots
+    :param sigma: gaussian sigma in heatmap pixels
+    :return: heatmaps tensor, shape [K, H, W]
+    """
+
+    def draw_heatmap(
+        heatmap: torch.Tensor,
+        center: torch.Tensor,
+        gaussian: torch.Tensor,
+        radius: int
+    ) -> None:
+        H, W = heatmap.shape
+        cy = float(center[0])
+        cx = float(center[1])
+        if not (0.0 <= cy <= 1.0 and 0.0 <= cx <= 1.0):
+            return
+
+        mu_y = int(cy * H)
+        mu_x = int(cx * W)
+        if mu_x < 0 or mu_x >= W or mu_y < 0 or mu_y >= H:
+            return
+
+        ul = (mu_x - radius, mu_y - radius)
+        br = (mu_x + radius + 1, mu_y + radius + 1)
+
+        if ul[0] >= W or ul[1] >= H or br[0] < 0 or br[1] < 0:
+            return
+
+        g_x0 = max(0, -ul[0])
+        g_x1 = min(br[0], W) - ul[0]
+        g_y0 = max(0, -ul[1])
+        g_y1 = min(br[1], H) - ul[1]
+
+        img_x0 = max(0, ul[0])
+        img_x1 = min(br[0], W)
+        img_y0 = max(0, ul[1])
+        img_y1 = min(br[1], H)
+
+        heatmap[img_y0:img_y1, img_x0:img_x1] = gaussian[g_y0:g_y1, g_x0:g_x1]
+
+    H, W = int(mapsize[0].item()), int(mapsize[1].item())
+    device = origin.device
+    heatmaps = torch.zeros((num_hm_slots, H, W), device=device, dtype=torch.float32)
+
+    # Make kernel
+    radius = int(sigma * 3)
+    size = 2 * radius + 1
+    xs = torch.arange(0, size, device=device, dtype=heatmaps.dtype)
+    ys = xs[:, None]
+    x0 = y0 = size // 2
+    gaussian = torch.exp(-((xs - x0) ** 2 + (ys - y0) ** 2) / (2 * sigma ** 2))
+
+    # Origin slot
+    if origin.numel() >= 2:
+        draw_heatmap(heatmaps[0], origin[0], gaussian, radius)
+
+    # Ticks: bottom -> top (y descending, since origin is top-left)
+    if ticks.numel() > 0:
+        ticks_sorted = ticks[torch.argsort(ticks[:, 0], descending=True)]
+    else:
+        ticks_sorted = ticks
+
+    max_ticks = min(num_tick_slots, ticks_sorted.size(0))
+    for i in range(max_ticks):
+        draw_heatmap(heatmaps[1 + i], ticks_sorted[i], gaussian, radius)
+
+    # Bars: left -> right (x ascending)
+    bar_slots = num_hm_slots - 1 - num_tick_slots
+    if bars.numel() > 0:
+        bars_sorted = bars[torch.argsort(bars[:, 1])]
+    else:
+        bars_sorted = bars
+
+    max_bars = min(bar_slots, bars_sorted.size(0))
+    for i in range(max_bars):
+        draw_heatmap(heatmaps[1 + num_tick_slots + i], bars_sorted[i], gaussian, radius)
+
+    return heatmaps
+
+
 def gt_maps_to_cls_lists(
     gt_org: torch.Tensor,
     gt_cls: torch.Tensor,
@@ -94,68 +196,6 @@ def gt_maps_to_cls_lists(
     return org, bars, ticks
 
 
-def keypoint_sets(
-    gt_coords: torch.Tensor,
-    kp_coords: torch.Tensor,
-    kp_logits: torch.Tensor,
-    cls_id: int,
-    # Hyperparameters
-    tau: float = 0.04,
-    sigma: float = 0.12,
-    lambda_missing: float = 1.0,
-    lambda_claim: float = 1.0,
-    lambda_bg: float = 0.5
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Matches predicted keypoints against ground truths.
-    Soft assignments & differentiable.
-
-    :param gt_coords: Ground truth coordinates
-    :param kp_coords: All keypoint coordinates
-    :param kp_logits: All keypoint logits
-    :param cls_id: 1 = bar, 2 = tick
-    :param tau: Soft assignment temperature
-    :param sigma: Distance threshold
-    :param lambda_missing: factor missing gt
-    :param lambda_claim: factor unclaimed gt
-    :param lambda_bg: factor erroneously claimed gt
-    :return: Tuple of losses
-    """
-    # Calculate pairwise distances
-    diff = gt_coords.unsqueeze(1) - kp_coords
-    dists = torch.sqrt((diff * diff).sum(dim=2) + 1e-8)
-
-    # Soft assign keypoints to ground truths
-    assign_kp_to_gt = F.softmin(dists / tau, dim=1)
-    soft_dist_gt = (assign_kp_to_gt * dists).sum(dim=1)
-    # Punish ground truths missing from predictions
-    coverage = torch.exp(-(soft_dist_gt / sigma) ** 2)
-    missing_loss = (1.0 - coverage).mean()
-
-    # Punish predictions being far away from ground truth
-    dist_loss = soft_dist_gt.mean()
-
-    # Punish ground truths not being claimed by predictions
-    cls_prob = torch.softmax(kp_logits[:, :3], dim=1)[:, cls_id]
-    gt_cls_conf = (assign_kp_to_gt * cls_prob).sum(dim=1)
-    claim_loss = (1.0 - gt_cls_conf).mean()
-
-    # Punish keypoints that should be background having the wrong class
-    assign_gt_to_kp = F.softmin(dists / tau, dim=0)
-    soft_dist_kp = (assign_gt_to_kp * dists).sum(dim=0)
-    bg_target = torch.sigmoid((soft_dist_kp - sigma) / (0.25 * sigma))
-    bg_loss = F.binary_cross_entropy_with_logits(
-        kp_logits[:, 0],
-        bg_target.detach()
-    )
-
-    return (
-        dist_loss,
-        lambda_missing * missing_loss,
-        lambda_claim * claim_loss,
-        lambda_bg * bg_loss)
-
-
 def p_maps_to_cls_lists(
     p_cls: torch.Tensor,
     p_reg: torch.Tensor,
@@ -167,7 +207,7 @@ def p_maps_to_cls_lists(
     Extracts and processes predicted bars, ticks & origin
     from classification and regression maps.
 
-    :param p_cls: classification map [3, H, W]
+    :param p_cls: classification map [4, H, W] (bg, bar, tick, origin)
     :param p_reg: regression map [2, H, W]
     :param size: size of the map, shape [2]
     :param bg_conf_thresh: background confidence threshold

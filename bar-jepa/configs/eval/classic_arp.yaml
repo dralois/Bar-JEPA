@@ -9,12 +9,14 @@ data:
   annotation_folder: annotations
   preserve_aspect_ratio: true
 keypoint:
-  max_keypoints: 64
+  hm_slots: 64
+  tick_slots: 15
+  hm_sigma: 2.0
   pnt_detect_thresh: 0.9
   cls_conf_thresh: 0.75
   eval_thresh: 1.5
 meta:
   model_name: vit_huge
   decoder_type: classic
-  read_checkpoint: ./output/kp-cl-arp-latest.pth.tar
+  read_checkpoint: ./output/kp-cl-arp-ep100.pth.tar
   use_bfloat16: true

@@ -1,5 +1,4 @@
 import os
-import time
 
 # -- FOR DISTRIBUTED TRAINING ENSURE ONLY 1 DEVICE VISIBLE PER PROCESS
 try:
@@ -13,19 +12,10 @@ except Exception:
 
 import logging
 import sys
-import yaml
-import wandb
 
 import numpy as np
 
 import torch
-import torch.multiprocessing as mp
-import torch.nn.functional as F
-from torch.nn.parallel import DistributedDataParallel
-
-from src.utils.distributed import (
-    init_distributed,
-    AllReduce)
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
@@ -35,18 +25,14 @@ from src.utils.heatmap import (
     f1
 )
 
-from src.utils.logging import (
-    CSVLogger,
-    gpu_timer)
-
 from src.datasets.charts import make_charts
 
 from src.masks.charts import UBPMCCollator
 
 from src.helper import (
     load_decoder_checkpoint,
-    init_decoder_model,
-    init_decoder_opt)
+    init_decoder_model
+)
 
 from src.transforms import make_transforms
 
@@ -83,7 +69,9 @@ def main(args, resume_preempt=False):
     patch_count = int((crop_size // patch_size) ** 2.)
 
     # -- KEYPOINT DETECTION
-    max_keypoints = args['keypoint']['max_keypoints']
+    num_hm_slots = args['keypoint']['hm_slots']
+    num_tick_slots = args['keypoint']['tick_slots']
+    hm_sigma = args['keypoint']['hm_sigma']
     pnt_thresh = args['keypoint']['pnt_detect_thresh']
     cls_thresh = args['keypoint']['cls_conf_thresh']
     eval_thresh = args['keypoint']['eval_thresh']
@@ -121,7 +109,7 @@ def main(args, resume_preempt=False):
         model_name=model_name,
         patch_size=patch_size,
         crop_size=crop_size,
-        max_keypoints=max_keypoints,
+        num_hm_slots=num_hm_slots,
         decoder_type=decoder_type)
 
     # -- make data transforms
@@ -184,15 +172,15 @@ def main(args, resume_preempt=False):
                 # Charts -> Embeddings
                 h = encoder(imgs, grids)
                 # Embeddings -> Predictions
-                p_cls, p_reg, p_kps = decoder(h, grids)
-                return p_cls, p_reg, p_kps
+                p_cls, p_reg, p_hm = decoder(h, grids)
+                return p_cls, p_reg, p_hm
 
             # Forward
             with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
                 sizes = torch.tensor([c.shape for c in gt_cls], device=device)
 
                 with torch.no_grad():
-                    p_cls, p_reg, p_kps = forward()
+                    p_cls, p_reg, _ = forward()
 
                 # For each chart in batch individually
                 for i in range(len(p_cls)):
@@ -201,16 +189,7 @@ def main(args, resume_preempt=False):
                         gt_orgs[i], gt_cls[i], gt_reg[i], sizes[i]
                     )
 
-                    # Keypoint coordinates & probabilities
-                    kp_coords = p_kps[i][:, :2]
-                    kp_logits = p_kps[i][:, 2:]
-
-                    # Origin coordinate loss
-                    origin_probs = torch.sigmoid(kp_logits[:, 3])
-                    origin_weights = origin_probs / (origin_probs.sum() + 1e-8)
-                    p_org_w = (origin_weights.unsqueeze(1) * kp_coords).sum(dim=0)
-
-                    # Radius for nms and l_pts is based on max(H, W)
+                    # Radius for nms is based on max(H, W)
                     radius_thresh = eval_thresh / sizes[i].max()
                     # Convert maps to lists of bars & ticks + origin
                     p_bars, p_ticks, p_org = p_maps_to_cls_lists(p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh)

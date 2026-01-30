@@ -31,23 +31,28 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
 from src.masks.multiblock import MaskCollator as MBMaskCollator
+from src.utils.tensors import repeat_interleave_batch, pack_by_masks
+from src.datasets.charts import make_charts
+from src.transforms import make_transforms
+
 from src.utils.distributed import (
     init_distributed,
     AllReduce
 )
+
 from src.utils.logging import (
     CSVLogger,
     gpu_timer,
     grad_logger,
-    AverageMeter)
-from src.utils.tensors import repeat_interleave_batch, pack_by_masks
-from src.datasets.charts import make_charts
+    AverageMeter
+)
 
 from src.helper import (
     load_ijepa_checkpoint,
     init_ijepa_model,
-    init_ijepa_opt)
-from src.transforms import make_transforms
+    init_ijepa_opt
+)
+
 
 # --
 log_timings = True
