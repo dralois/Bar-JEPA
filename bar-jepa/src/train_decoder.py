@@ -398,10 +398,10 @@ def main(args, resume_preempt=False):
 
                 # Average over batch and apply weighting.
                 batch_len = max(1, len(p_cls))
-                l_org /= (20.0 * batch_len)
-                l_cls /= (50.0 * batch_len)
-                l_reg /= (1.0 * batch_len)
-                l_hm /= (0.1 * batch_len)
+                l_org /= (1.0 * batch_len)
+                l_cls /= (1.0 * batch_len)
+                l_reg /= (0.1 * batch_len)
+                l_hm /= (0.005 * batch_len)
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
