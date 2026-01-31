@@ -385,7 +385,14 @@ def main(args, resume_preempt=False):
                             num_tick_slots=num_tick_slots,
                             sigma=hm_sigma
                         )
-                        l_hm += F.mse_loss(p_hm[i], gt_hm)
+                        pred_flat = p_hm[i].reshape(num_hm_slots, -1)
+                        gt_flat = gt_hm.reshape(num_hm_slots, -1)
+                        loss_sum = sum(
+                            F.mse_loss(pred_flat[k], gt_flat[k])
+                            for k in range(num_hm_slots)
+                            if gt_flat[k].max() > 0
+                        )
+                        l_hm += loss_sum / num_hm_slots
                     else:
                         l_hm.detach()
 

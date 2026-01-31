@@ -310,7 +310,7 @@ def main(args, resume_preempt=False):
     # -- Initialize wandb
     run = wandb.init(
         entity="bar-ijepa",
-        project='bar-ijepa-finetune',
+        project='bar-ijepa-encoder',
         mode='offline',
         config={
             'learning-rate': lr,

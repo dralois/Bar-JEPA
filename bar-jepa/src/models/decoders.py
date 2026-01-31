@@ -141,7 +141,7 @@ class KeypointDetector(nn.Module):
             nn.Tanh()
         ) # Predicts (dx, dy) offsets
 
-        self.drop_layer = nn.Dropout(p=0.5)
+        self.drop_layer = nn.Dropout(p=0.3)
 
         self.init_std = init_std
         self.apply(self._init_weights)
@@ -187,12 +187,14 @@ class KeypointDetector(nn.Module):
             valid_x = x[i, :num_patches]
             valid_x = valid_x.permute(1, 0).view(1, -1, H, W)
 
+            # First dropout before decoder
+            valid_x = self.drop_layer(valid_x)
             # Get feature map from the decoder [C_out, H*4, W*4]
             valid_x = self.decoder(valid_x)
-            valid_x = self.drop_layer(valid_x)
-
             # Store heatmaps (one channel per keypoint slot)
             hm_preds.append(valid_x)
+            # Second dropout for heads
+            valid_x = self.drop_layer(valid_x)
 
             # Decode class logits and offsets from latent features
             cls_logits = self.fc_cls(valid_x)
