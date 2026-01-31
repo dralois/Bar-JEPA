@@ -51,7 +51,7 @@ from src.helper import (
 
 # --
 log_timings = True
-log_freq = 1
+log_freq = 10
 checkpoint_freq = 10
 # --
 
@@ -396,9 +396,12 @@ def main(args, resume_preempt=False):
                     else:
                         l_hm.detach()
 
-                # Apply scaling factors
-                l_org /= 1.
-                l_hm /= 1.
+                # Average over batch and apply weighting.
+                batch_len = max(1, len(p_cls))
+                l_org /= (20.0 * batch_len)
+                l_cls /= (50.0 * batch_len)
+                l_reg /= (1.0 * batch_len)
+                l_hm /= (0.1 * batch_len)
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
