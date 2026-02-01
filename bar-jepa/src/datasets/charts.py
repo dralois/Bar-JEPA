@@ -33,9 +33,8 @@ def make_charts(
     world_size=1,
     rank=0,
     root_path=None,
-    image_folder=None,
-    annotation_folder=None,
     val_train_split=True,
+    decoder_training=True,
     training=True,
     drop_last=True,
     shuffle=False
@@ -46,10 +45,9 @@ def make_charts(
     dataset = Charts(
         patch_size=patch_size,
         root=root_path,
-        image_folder=image_folder,
-        annotation_folder=annotation_folder,
         transform=transform,
-        training=training)
+        training=training,
+        decoder_training=decoder_training)
     logger.info('Chart dataset created')
 
     def create_sampler_loader(dataset):
@@ -86,20 +84,20 @@ class Charts(torchvision.datasets.DatasetFolder):
         self,
         patch_size,
         root='data',
-        image_folder='images',
-        annotation_folder='annotations',
         transform=None,
-        training=True
+        training=True,
+        decoder_training=True
     ):
         """
         Chart dataset loader
 
         :param root: Root directory for dataset
-        :param image_folder: Path to images inside root directory
-        :param annotation_folder: Path to annotations inside root directory
         :param training: whether to load train or test data
+        :param decoder_training: whether to return annotations for decoder training
         """
 
+        image_folder = 'images'
+        annotation_folder = 'annotations'
         suffix = 'train' if training else 'test'
         img_path = os.path.join(root, suffix, image_folder)
         ann_path = os.path.join(root, suffix, annotation_folder)
@@ -114,6 +112,7 @@ class Charts(torchvision.datasets.DatasetFolder):
         try:
             self.patch_size = patch_size
             self.transform = transform if transform is not None else PILToTensor()
+            self.decoder_training = decoder_training
             self.data_paths = []
 
             for fname in os.listdir(img_path):
@@ -122,13 +121,12 @@ class Charts(torchvision.datasets.DatasetFolder):
                     img_full_path = os.path.join(img_path, fname)
                     ann_full_path = os.path.join(ann_path, f"{base_name}.json")
 
-                    # If annotation path and image path are the same, then annotations are irrelevant
-                    if img_path == ann_path:
-                        self.data_paths.append((img_full_path, None))
-                    elif not os.path.exists(ann_full_path):
-                        raise FileNotFoundError(f"Annotation file not found for image: {fname}")
-                    else:
+                    if self.decoder_training:
+                        if not os.path.exists(ann_full_path):
+                            raise FileNotFoundError(f"Annotation file not found for image: {fname}")
                         self.data_paths.append((img_full_path, ann_full_path))
+                    else:
+                        self.data_paths.append((img_full_path, ann_full_path if os.path.exists(ann_full_path) else None))
 
             logger.info(f'Loaded {len(self.data_paths)} {"training" if training else "test"} images')
 
@@ -146,8 +144,8 @@ class Charts(torchvision.datasets.DatasetFolder):
         img = Image.open(img_path).convert('RGB')
         img = self.transform(img)
 
-        # If no annotations, we are finetuning
-        if ann_path is None:
+        # If not decoder training, ignore annotations
+        if not self.decoder_training:
             return img, 0
 
         # -- Annotations

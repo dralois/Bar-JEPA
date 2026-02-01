@@ -5,8 +5,7 @@ data:
   num_workers: 1
   pin_mem: false
   root_path: ./data
-  image_folder: images
-  annotation_folder: annotations
+  is_ubpmc: false
   preserve_aspect_ratio: false
 logging:
   folder: ./output

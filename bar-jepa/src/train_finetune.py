@@ -96,8 +96,6 @@ def main(args, resume_preempt=False):
     pin_mem = args['data']['pin_mem']
     num_workers = args['data']['num_workers']
     root_path = args['data']['root_path']
-    image_folder = args['data']['image_folder']
-    annotation_folder = args['data']['image_folder']
     crop_size = args['data']['crop_size']
     crop_scale = args['data']['crop_scale']
     # --
@@ -235,10 +233,9 @@ def main(args, resume_preempt=False):
             world_size=world_size,
             rank=rank,
             root_path=root_path,
-            image_folder=image_folder,
-            annotation_folder=annotation_folder,
-            val_train_split=False,
             training=True,
+            val_train_split=False,
+            decoder_training=False,
             drop_last=True)
     ipe = len(unsupervised_loader)
 

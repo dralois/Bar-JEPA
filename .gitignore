@@ -217,7 +217,7 @@ __marimo__/
 
 # Own stuff
 output/**
-UB_PMC_sample/**
+UBPMC/**
 .DS_STORE
 data/**
 data_small/**

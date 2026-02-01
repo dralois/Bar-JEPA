@@ -24,8 +24,9 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
 
 from src.datasets.charts import make_charts
+from src.datasets.ubpmc import make_ubpmc
 from src.transforms import make_transforms
-from src.masks.charts import ChartsCollator
+from src.masks.charts import ChartsCollator, UBPMCCollator
 
 from src.utils.distributed import (
     init_distributed,
@@ -85,8 +86,7 @@ def main(args, resume_preempt=False):
     pin_mem = args['data']['pin_mem']
     num_workers = args['data']['num_workers']
     root_path = args['data']['root_path']
-    image_folder = args['data']['image_folder']
-    annotation_folder = args['data']['annotation_folder']
+    is_ubpmc = args['data']['is_ubpmc']
     crop_size = args['data']['crop_size']
     patch_size = args['data']['patch_size']
     patch_count = int((crop_size // patch_size) ** 2.)
@@ -192,23 +192,39 @@ def main(args, resume_preempt=False):
         patch_size=patch_size)
 
     # -- init data-loaders/samplers
-    collator = ChartsCollator()
-    train_loader, train_sampler, val_loader, val_sampler = make_charts( # type: ignore
-            transform=transform,
-            batch_size=batch_size,
-            patch_size=patch_size,
-            collator=collator,
-            pin_mem=pin_mem,
-            num_workers=num_workers,
-            world_size=world_size,
-            rank=rank,
-            root_path=root_path,
-            image_folder=image_folder,
-            annotation_folder=annotation_folder,
-            val_train_split=True,
-            training=True,
-            drop_last=False,
-            shuffle=True)
+    if is_ubpmc:
+        collator = UBPMCCollator()
+        train_loader, train_sampler, val_loader, val_sampler = make_ubpmc( # type: ignore
+                transform=transform,
+                batch_size=batch_size,
+                patch_size=patch_size,
+                collator=collator,
+                pin_mem=pin_mem,
+                num_workers=num_workers,
+                world_size=world_size,
+                rank=rank,
+                root_path=root_path,
+                training=True,
+                val_train_split=True,
+                drop_last=False,
+                shuffle=True)
+    else:
+        collator = ChartsCollator()
+        train_loader, train_sampler, val_loader, val_sampler = make_charts( # type: ignore
+                transform=transform,
+                batch_size=batch_size,
+                patch_size=patch_size,
+                collator=collator,
+                pin_mem=pin_mem,
+                num_workers=num_workers,
+                world_size=world_size,
+                rank=rank,
+                root_path=root_path,
+                training=True,
+                val_train_split=True,
+                decoder_training=True,
+                drop_last=False,
+                shuffle=True)
     ipe = len(train_loader)
 
     # -- init optimizer and scheduler
@@ -395,8 +411,8 @@ def main(args, resume_preempt=False):
                 batch_len = max(1, len(p_cls))
                 l_org /= (0.5 * batch_len)
                 l_cls /= (1.0 * batch_len)
-                l_reg /= (0.1 * batch_len)
-                l_hm /= (0.1 * batch_len)
+                l_reg /= (0.5 * batch_len)
+                l_hm /= (0.01 * batch_len)
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore

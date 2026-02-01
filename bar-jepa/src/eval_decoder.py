@@ -26,8 +26,9 @@ from src.utils.heatmap import (
 )
 
 from src.datasets.charts import make_charts
+from src.datasets.ubpmc import make_ubpmc
 
-from src.masks.charts import UBPMCCollator
+from src.masks.charts import ChartsCollator, UBPMCCollator
 
 from src.helper import (
     load_decoder_checkpoint,
@@ -62,8 +63,7 @@ def main(args, resume_preempt=False):
     pin_mem = args['data']['pin_mem']
     num_workers = args['data']['num_workers']
     root_path = args['data']['root_path']
-    image_folder = args['data']['image_folder']
-    annotation_folder = args['data']['annotation_folder']
+    is_ubpmc = args['data']['is_ubpmc']
     crop_size = args['data']['crop_size']
     patch_size = args['data']['patch_size']
     patch_count = int((crop_size // patch_size) ** 2.)
@@ -124,21 +124,35 @@ def main(args, resume_preempt=False):
         patch_size=patch_size)
 
     # -- init data-loaders/samplers
-    collator = UBPMCCollator()
-    train_loader, train_sampler, val_loader, val_sampler = make_charts( # type: ignore
-            transform=transform,
-            batch_size=batch_size,
-            patch_size=patch_size,
-            collator=collator,
-            pin_mem=pin_mem,
-            num_workers=num_workers,
-            root_path=root_path,
-            image_folder=image_folder,
-            annotation_folder=annotation_folder,
-            val_train_split=True,
-            training=True,
-            drop_last=False,
-            shuffle=True)
+    if is_ubpmc:
+        collator = UBPMCCollator()
+        train_loader, train_sampler, val_loader, val_sampler = make_ubpmc( # type: ignore
+                transform=transform,
+                batch_size=batch_size,
+                patch_size=patch_size,
+                collator=collator,
+                pin_mem=pin_mem,
+                num_workers=num_workers,
+                root_path=root_path,
+                training=True,
+                val_train_split=True,
+                drop_last=False,
+                shuffle=True)
+    else:
+        collator = ChartsCollator()
+        train_loader, train_sampler, val_loader, val_sampler = make_charts( # type: ignore
+                transform=transform,
+                batch_size=batch_size,
+                patch_size=patch_size,
+                collator=collator,
+                pin_mem=pin_mem,
+                num_workers=num_workers,
+                root_path=root_path,
+                val_train_split=True,
+                decoder_training=True,
+                training=True,
+                drop_last=False,
+                shuffle=True)
     ipe = len(train_loader)
 
     # -- load training checkpoint
