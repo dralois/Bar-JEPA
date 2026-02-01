@@ -1,5 +1,5 @@
 data:
-  batch_size: 300
+  batch_size: 500
   crop_size: 224
   patch_size: 14
   num_workers: 12
@@ -15,7 +15,7 @@ keypoint:
   use_hm_loss: true
   hm_slots: 64
   tick_slots: 15
-  hm_sigma: 2.0
+  hm_sigma: 1.0
   class_weights:
   - 0.05
   - 1.0

@@ -34,7 +34,8 @@ from src.utils.distributed import (
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
-    build_slot_heatmaps
+    build_slot_heatmaps,
+    adaptive_wing_loss
 )
 
 from src.utils.logging import (
@@ -51,7 +52,7 @@ from src.helper import (
 
 # --
 log_timings = True
-log_freq = 10
+log_freq = 5
 checkpoint_freq = 10
 # --
 
@@ -359,10 +360,7 @@ def main(args, resume_preempt=False):
                         p_cls[i][:3].unsqueeze(0),
                         gt_cls[i].unsqueeze(0),
                         weight=cls_weights)
-                    l_org += F.binary_cross_entropy_with_logits(
-                        p_cls[i][3],
-                        gt_orgs[i]
-                    )
+                    l_org += adaptive_wing_loss(p_cls[i][3], gt_orgs[i])
 
                     # Regression loss only on non-background samples
                     gt_reg_masked = torch.masked_select(gt_reg[i], gt_cls[i].gt(0))
@@ -374,7 +372,7 @@ def main(args, resume_preempt=False):
                         gt_orgs[i], gt_cls[i], gt_reg[i], sizes[i]
                     )
 
-                    # Heatmap loss (MSRA targets as in ViTPose)
+                    # Heatmap loss (UDP targets as in ViTPose)
                     if use_hm_loss:
                         gt_hm = build_slot_heatmaps(
                             gt_org,
@@ -385,23 +383,20 @@ def main(args, resume_preempt=False):
                             num_tick_slots=num_tick_slots,
                             sigma=hm_sigma
                         )
-                        pred_flat = p_hm[i].reshape(num_hm_slots, -1)
-                        gt_flat = gt_hm.reshape(num_hm_slots, -1)
-                        loss_sum = sum(
-                            F.mse_loss(pred_flat[k], gt_flat[k])
-                            for k in range(num_hm_slots)
-                            if gt_flat[k].max() > 0
-                        )
+                        loss_sum = torch.tensor(0., device=device)
+                        for k in range(num_hm_slots):
+                            if gt_hm[k].max() > 0:
+                                loss_sum += adaptive_wing_loss(p_hm[i][k], gt_hm[k])
                         l_hm += loss_sum / num_hm_slots
                     else:
                         l_hm.detach()
 
                 # Average over batch and apply weighting.
                 batch_len = max(1, len(p_cls))
-                l_org /= (1.0 * batch_len)
+                l_org /= (0.5 * batch_len)
                 l_cls /= (1.0 * batch_len)
                 l_reg /= (0.1 * batch_len)
-                l_hm /= (0.005 * batch_len)
+                l_hm /= (0.1 * batch_len)
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore

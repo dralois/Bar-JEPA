@@ -2,18 +2,130 @@ import sys
 import logging
 
 import torch
-import torch.nn.functional as F
-
 from typing import List, Tuple
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
 
 
+def adaptive_wing_loss(
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+    alpha: float = 2.1,
+    omega: float = 14.0,
+    epsilon: float = 1.0,
+    theta: float = 0.5
+) -> torch.Tensor:
+    """
+    Computes the adaptive wing loss between predictions and ground truth.
+
+    :param pred: predicted values
+    :param gt: ground truth values
+    :return: Mean loss value across all elements
+    """
+    delta = (gt - pred).abs()
+
+    # Loss function for large errors
+    A = omega * (
+        1 / (1 + torch.pow(theta / epsilon, alpha - gt))
+    ) * (alpha - gt) * (
+        torch.pow(theta / epsilon, alpha - gt - 1)
+    ) * (1 / epsilon)
+
+    # Ensures continuity at the threshold point
+    C = theta * A - omega * torch.log(
+        1 + torch.pow(theta / epsilon, alpha - gt)
+    )
+
+    # For small errors (delta < theta): use logarithmic loss
+    # For large errors (delta >= theta): use linear loss
+    losses = torch.where(
+        delta < theta,
+        omega * torch.log(1 + torch.pow(delta / epsilon, alpha - gt)),
+        A * delta - C
+    )
+
+    return losses.mean()
+
+
+def udp_decode_point(
+    point: torch.Tensor,
+    size: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Converts normalized coordinates to discrete index + sub-pixel offset.
+
+    :param point: normalized [y, x]
+    :param size: map size [H, W]
+    :return: Tuple containing:
+
+        - map index [y, x]
+        - regression offset [y, x]
+    """
+    coord = point * (size.to(dtype=torch.float32) - 1).clamp(min=1.0)
+    idx = torch.floor(coord).type(torch.int32)
+    reg = coord - idx - 0.5
+    return idx, reg
+
+
+def udp_encode_point(
+    idx: torch.Tensor,
+    reg: torch.Tensor,
+    size: torch.Tensor
+) -> torch.Tensor:
+    """
+    Converts discrete index + sub-pixel offset to normalized coordinates.
+
+    :param index: map index [y, x] or [N, [y, x]]
+    :param reg: regression offset [y, x] or [N, [y, x]]
+    :param size: map size [H, W]
+    :return: normalized point [y, x]
+    """
+    scale = (size.to(dtype=torch.float32) - 1).clamp(min=1.0)
+    return (idx.to(dtype=torch.float32) + reg + 0.5) / scale
+
+
+def draw_heatmap(
+    heatmap: torch.Tensor,
+    center: torch.Tensor,
+    sigma: float
+) -> None:
+    """
+    Draws a gaussian heatmap centered at a normalized coordinate.
+
+    :param heatmap: target heatmap [H, W]
+    :param center: normalized [y, x] coordinate
+    :param sigma: gaussian sigma in heatmap pixels
+    """
+    H, W = heatmap.shape
+    cy = float(center[0])
+    cx = float(center[1])
+
+    mu_y = cy * (H - 1)
+    mu_x = cx * (W - 1)
+    radius = int(sigma * 3)
+
+    ul = (int(mu_x) - radius, int(mu_y) - radius)
+    br = (int(mu_x) + radius + 1, int(mu_y) + radius + 1)
+
+    x0 = max(0, ul[0])
+    x1 = min(br[0], W)
+    y0 = max(0, ul[1])
+    y1 = min(br[1], H)
+
+    xs = torch.arange(x0, x1, device=heatmap.device, dtype=heatmap.dtype)
+    ys = torch.arange(y0, y1, device=heatmap.device, dtype=heatmap.dtype)
+    ys = ys[:, None]
+    gaussian = torch.exp(-((xs - mu_x) ** 2 + (ys - mu_y) ** 2) / (2 * sigma ** 2))
+
+    heatmap[y0:y1, x0:x1] = gaussian
+
+
 def cls_pts_to_maps(
     cls_pts_lists: List[torch.Tensor],
     origin: torch.Tensor,
-    mapsize: torch.Tensor
+    mapsize: torch.Tensor,
+    origin_sigma: float = 1.0
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Converts a list of points of different classes
@@ -21,6 +133,7 @@ def cls_pts_to_maps(
 
     :param cls_pts_lists: list of lists containing normalized points for each class
     :param mapsize: size of the output maps, (H, W)
+    :param origin_sigma: gaussian sigma for origin target in heatmap pixels
     :return: tuple containing:
 
         - map with class IDs, shape [H, W]
@@ -37,18 +150,27 @@ def cls_pts_to_maps(
     for cls_id, cls_list in enumerate(cls_pts_lists):
         for point in cls_list:
             # Compute map coordinates and regression values
-            pos = torch.floor(point * mapsize).type(torch.int32)
-            reg = (point * mapsize) - pos - 0.5
+            pos, reg = udp_decode_point(point, mapsize)
 
             # Store in maps
             cls_map[pos[0], pos[1]] = cls_id + 1
             reg_map[:, pos[0], pos[1]] = reg
 
-    # Store origin
-    org_pos = torch.floor(origin * mapsize).type(torch.int32)
-    org_reg = (origin * mapsize) - org_pos - 0.5
-    org_map[org_pos[0], org_pos[1]] = 1.0
-    reg_map[:, org_pos[0], org_pos[1]] = org_reg
+    # Origin heatmap can be either one hot or gaussian target
+    if origin_sigma > 0:
+        draw_heatmap(org_map, origin, origin_sigma)
+        # Also store offset at the argmax pixel to match decoding.
+        org_argmax = torch.argmax(org_map)
+        org_point = torch.stack(torch.unravel_index(org_argmax, org_map.shape))
+        scale = (mapsize.to(dtype=torch.float32) - 1).clamp(min=1.0)
+        org_coord = origin * scale
+        reg_map[:, org_point[0], org_point[1]] = (
+            org_coord - org_point.to(dtype=torch.float32) - 0.5
+        )
+    else:
+        org_idx, org_reg = udp_decode_point(origin, mapsize)
+        org_map[org_idx[0], org_idx[1]] = 1.0
+        reg_map[:, org_idx[0], org_idx[1]] = org_reg
 
     return org_map, cls_map, reg_map
 
@@ -79,57 +201,13 @@ def build_slot_heatmaps(
     :param sigma: gaussian sigma in heatmap pixels
     :return: heatmaps tensor, shape [K, H, W]
     """
-
-    def draw_heatmap(
-        heatmap: torch.Tensor,
-        center: torch.Tensor,
-        gaussian: torch.Tensor,
-        radius: int
-    ) -> None:
-        H, W = heatmap.shape
-        cy = float(center[0])
-        cx = float(center[1])
-        if not (0.0 <= cy <= 1.0 and 0.0 <= cx <= 1.0):
-            return
-
-        mu_y = int(cy * H)
-        mu_x = int(cx * W)
-        if mu_x < 0 or mu_x >= W or mu_y < 0 or mu_y >= H:
-            return
-
-        ul = (mu_x - radius, mu_y - radius)
-        br = (mu_x + radius + 1, mu_y + radius + 1)
-
-        if ul[0] >= W or ul[1] >= H or br[0] < 0 or br[1] < 0:
-            return
-
-        g_x0 = max(0, -ul[0])
-        g_x1 = min(br[0], W) - ul[0]
-        g_y0 = max(0, -ul[1])
-        g_y1 = min(br[1], H) - ul[1]
-
-        img_x0 = max(0, ul[0])
-        img_x1 = min(br[0], W)
-        img_y0 = max(0, ul[1])
-        img_y1 = min(br[1], H)
-
-        heatmap[img_y0:img_y1, img_x0:img_x1] = gaussian[g_y0:g_y1, g_x0:g_x1]
-
     H, W = int(mapsize[0].item()), int(mapsize[1].item())
     device = origin.device
     heatmaps = torch.zeros((num_hm_slots, H, W), device=device, dtype=torch.float32)
 
-    # Make kernel
-    radius = int(sigma * 3)
-    size = 2 * radius + 1
-    xs = torch.arange(0, size, device=device, dtype=heatmaps.dtype)
-    ys = xs[:, None]
-    x0 = y0 = size // 2
-    gaussian = torch.exp(-((xs - x0) ** 2 + (ys - y0) ** 2) / (2 * sigma ** 2))
-
     # Origin slot
     if origin.numel() >= 2:
-        draw_heatmap(heatmaps[0], origin[0], gaussian, radius)
+        draw_heatmap(heatmaps[0], origin[0], sigma)
 
     # Ticks: bottom -> top (y descending, since origin is top-left)
     if ticks.numel() > 0:
@@ -139,7 +217,7 @@ def build_slot_heatmaps(
 
     max_ticks = min(num_tick_slots, ticks_sorted.size(0))
     for i in range(max_ticks):
-        draw_heatmap(heatmaps[1 + i], ticks_sorted[i], gaussian, radius)
+        draw_heatmap(heatmaps[1 + i], ticks_sorted[i], sigma)
 
     # Bars: left -> right (x ascending)
     bar_slots = num_hm_slots - 1 - num_tick_slots
@@ -150,7 +228,7 @@ def build_slot_heatmaps(
 
     max_bars = min(bar_slots, bars_sorted.size(0))
     for i in range(max_bars):
-        draw_heatmap(heatmaps[1 + num_tick_slots + i], bars_sorted[i], gaussian, radius)
+        draw_heatmap(heatmaps[1 + num_tick_slots + i], bars_sorted[i], sigma)
 
     return heatmaps
 
@@ -177,14 +255,20 @@ def gt_maps_to_cls_lists(
     """
     # Get all non-background points
     points = torch.nonzero(gt_cls > 0)
-    org_point = torch.nonzero(gt_org > 0)
+    org_idx = torch.argmax(gt_org)
+    org_point = torch.stack(torch.unravel_index(org_idx, gt_org.shape)).unsqueeze(0)
 
-    # Pixel midpoints in image space
-    pos = (points * 2 + 1) / (size * 2)
-    org = (org_point * 2 + 1) / (size * 2)
-    # Apply regression offsets
-    pos += gt_reg[:, points[:, 0], points[:, 1]].T / size
-    org += gt_reg[:, org_point[:, 0], org_point[:, 1]].T / size
+    # UDP: use pixel index + offset + 0.5, then normalize by (size - 1)
+    pos = udp_encode_point(
+        points,
+        gt_reg[:, points[:, 0], points[:, 1]].T,
+        size
+    )
+    org = udp_encode_point(
+        org_point,
+        gt_reg[:, org_point[:, 0], org_point[:, 1]].T,
+        size
+    )
 
     # Class labels for each point
     cls = gt_cls[points[:, 0], points[:, 1]]
@@ -228,10 +312,8 @@ def p_maps_to_cls_lists(
     # Select high confidence candidates from background-masked bars heatmap
     masked_bars = (torch.sigmoid(p_cls[1]) * pts_mask).gt(cls_conf_thresh)
     for point in torch.nonzero(masked_bars):
-        # Pixel midpoint in image space
-        pos = (point * 2 + 1) / (size * 2)
-        # Offset pixel midpoint by regression value
-        pos += p_reg[:, point[0], point[1]] / size
+        # UDP: pixel index + offset + 0.5, normalize by (size - 1)
+        pos = udp_encode_point(point, p_reg[:, point[0], point[1]], size)
         # Store image space prediction and confidence for bar
         conf = torch.sigmoid(p_cls[1, point[0], point[1]])
         bars.append((pos, conf))
@@ -239,10 +321,8 @@ def p_maps_to_cls_lists(
     # Select high confidence candidates from background-masked ticks heatmap
     masked_ticks = (torch.sigmoid(p_cls[2]) * pts_mask).gt(cls_conf_thresh)
     for point in torch.nonzero(masked_ticks):
-        # Pixel midpoint in image space
-        pos = (point * 2 + 1) / (size * 2)
-        # Offset pixel midpoint by regression value
-        pos += p_reg[:, point[0], point[1]] / size
+        # UDP: pixel index + offset + 0.5, normalize by (size - 1)
+        pos = udp_encode_point(point, p_reg[:, point[0], point[1]], size)
         # Store image space prediction and confidence for tick
         conf = torch.sigmoid(p_cls[2, point[0], point[1]])
         ticks.append((pos, conf))
@@ -250,9 +330,7 @@ def p_maps_to_cls_lists(
     # Select highest confidence candidate from background-masked origin heatmap
     org_idx = torch.argmax(torch.sigmoid(p_cls[3]) * pts_mask)
     org_point = torch.stack(torch.unravel_index(org_idx, p_cls[3].shape))
-    org_pos = (org_point * 2 + 1) / (size * 2)
-    # Offset pixel midpoint by regression value
-    org_pos += p_reg[:, org_point[0], org_point[1]] / size
+    org_pos = udp_encode_point(org_point, p_reg[:, org_point[0], org_point[1]], size)
 
     return bars, ticks, org_pos
 
