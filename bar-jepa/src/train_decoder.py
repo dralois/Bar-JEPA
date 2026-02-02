@@ -35,8 +35,7 @@ from src.utils.distributed import (
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
-    build_slot_heatmaps,
-    adaptive_wing_loss
+    build_slot_heatmaps
 )
 
 from src.utils.logging import (
@@ -328,7 +327,7 @@ def main(args, resume_preempt=False):
                             '[%.3f + %.3f + %.3f + %.3f] '
                             '[mem: %.2e, lr: %.2e, wd: %.2e] '
                             '(%.1f | %.1f ms)'
-                            % ('Train' if train else 'Val', epoch + 1, itr,
+                            % ('Train' if train else 'Validation', epoch + 1, itr,
                                 loss_train_m.avg if train else loss_val_m.avg,
                                 org_loss_train_m.avg if train else org_loss_val_m.avg,
                                 cls_loss_train_m.avg if train else cls_loss_val_m.avg,
@@ -363,6 +362,14 @@ def main(args, resume_preempt=False):
                 return p_cls, p_reg, p_hm
 
             def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_hm):
+                def weighted_mse(
+                    pred: torch.Tensor,
+                    gt: torch.Tensor,
+                    bg_weight: torch.Tensor
+                ) -> torch.Tensor:
+                    weight = bg_weight + gt
+                    return ((pred - gt) ** 2 * weight).mean()
+
                 l_org = torch.tensor(0., device=device)
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
@@ -376,7 +383,11 @@ def main(args, resume_preempt=False):
                         p_cls[i][:3].unsqueeze(0),
                         gt_cls[i].unsqueeze(0),
                         weight=cls_weights)
-                    l_org += adaptive_wing_loss(p_cls[i][3], gt_orgs[i])
+                    l_org += weighted_mse(
+                        torch.sigmoid(p_cls[i][3]),
+                        gt_orgs[i],
+                        cls_weights[0]
+                    )
 
                     # Regression loss only on non-background samples
                     gt_reg_masked = torch.masked_select(gt_reg[i], gt_cls[i].gt(0))
@@ -399,11 +410,13 @@ def main(args, resume_preempt=False):
                             num_tick_slots=num_tick_slots,
                             sigma=hm_sigma
                         )
-                        loss_sum = torch.tensor(0., device=device)
                         for k in range(num_hm_slots):
                             if gt_hm[k].max() > 0:
-                                loss_sum += adaptive_wing_loss(p_hm[i][k], gt_hm[k])
-                        l_hm += loss_sum / num_hm_slots
+                                l_hm += weighted_mse(
+                                    torch.sigmoid(p_hm[i][k]),
+                                    gt_hm[k],
+                                    cls_weights[0]
+                                )
                     else:
                         l_hm.detach()
 
