@@ -362,14 +362,6 @@ def main(args, resume_preempt=False):
                 return p_cls, p_reg, p_hm
 
             def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_hm):
-                def weighted_mse(
-                    pred: torch.Tensor,
-                    gt: torch.Tensor,
-                    bg_weight: torch.Tensor
-                ) -> torch.Tensor:
-                    weight = bg_weight + gt
-                    return ((pred - gt) ** 2 * weight).mean()
-
                 l_org = torch.tensor(0., device=device)
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
@@ -383,10 +375,9 @@ def main(args, resume_preempt=False):
                         p_cls[i][:3].unsqueeze(0),
                         gt_cls[i].unsqueeze(0),
                         weight=cls_weights)
-                    l_org += weighted_mse(
+                    l_org += F.mse_loss(
                         torch.sigmoid(p_cls[i][3]),
-                        gt_orgs[i],
-                        cls_weights[0]
+                        gt_orgs[i]
                     )
 
                     # Regression loss only on non-background samples
@@ -412,11 +403,10 @@ def main(args, resume_preempt=False):
                         )
                         for k in range(num_hm_slots):
                             if gt_hm[k].max() > 0:
-                                l_hm += weighted_mse(
-                                    torch.sigmoid(p_hm[i][k]),
-                                    gt_hm[k],
-                                    cls_weights[0]
-                                )
+                                gt_flat = gt_hm[k].reshape(-1)
+                                gt_prob = gt_flat / (gt_flat.sum() + 1e-6)
+                                log_probs = F.log_softmax(p_hm[i][k].reshape(-1), dim=0)
+                                l_hm += -(gt_prob * log_probs).sum()
                     else:
                         l_hm.detach()
 
@@ -425,7 +415,7 @@ def main(args, resume_preempt=False):
                 l_org /= (0.5 * batch_len)
                 l_cls /= (1.0 * batch_len)
                 l_reg /= (0.5 * batch_len)
-                l_hm /= (0.01 * batch_len)
+                l_hm /= (100.0 * batch_len)
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore

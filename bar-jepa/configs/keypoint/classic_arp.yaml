@@ -9,7 +9,7 @@ data:
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-cl-arp-t4
+  write_tag: kp-cl-arp-t5
 keypoint:
   use_hm_loss: true
   hm_slots: 64
@@ -29,7 +29,7 @@ meta:
   use_bfloat16: true
 optimization:
   epochs: 100
-  final_lr: 1.0e-06
+  final_lr: 1.0e-05
   final_weight_decay: 0.1
   ipe_scale: 1.0
   lr: 1.0e-03
