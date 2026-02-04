@@ -12,6 +12,7 @@ logging:
   write_tag: kp-spl-arp
 keypoint:
   use_hm_loss: true
+  use_aux_heads: true
   hm_slots: 64
   tick_slots: 15
   hm_sigma: 1.0

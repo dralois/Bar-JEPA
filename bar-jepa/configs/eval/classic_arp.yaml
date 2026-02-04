@@ -5,18 +5,17 @@ data:
   num_workers: 1
   pin_mem: false
   root_path: ./data
-  image_folder: images
-  annotation_folder: annotations
+  is_ubpmc: false
   preserve_aspect_ratio: true
 keypoint:
   hm_slots: 64
   tick_slots: 15
-  hm_sigma: 2.0
+  hm_sigma: 1.0
   pnt_detect_thresh: 0.9
   cls_conf_thresh: 0.75
   eval_thresh: 1.5
 meta:
   model_name: vit_huge
   decoder_type: classic
-  read_checkpoint: ./output/kp-cl-arp-ep100.pth.tar
+  read_checkpoint: ./output/kp-cl-arp-t6-ep100.pth.tar
   use_bfloat16: true

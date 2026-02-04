@@ -12,6 +12,7 @@ logging:
   write_tag: keypoint
 keypoint:
   use_hm_loss: false
+  use_aux_heads: true
   hm_slots: 64
   tick_slots: 15
   hm_sigma: 1.0

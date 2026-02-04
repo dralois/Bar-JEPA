@@ -92,6 +92,7 @@ def main(args, resume_preempt=False):
 
     # -- KEYPOINT DETECTION
     use_hm_loss = args['keypoint']['use_hm_loss']
+    use_aux_heads = args['keypoint']['use_aux_heads']
     num_hm_slots = args['keypoint']['hm_slots']
     num_tick_slots = args['keypoint']['tick_slots']
     hm_sigma = args['keypoint']['hm_sigma']
@@ -370,28 +371,33 @@ def main(args, resume_preempt=False):
 
                 # For each chart in batch individually
                 for i in range(len(p_cls)):
-                    # Weighted classification loss (origin is separate)
-                    l_cls += F.cross_entropy(
-                        p_cls[i][:3].unsqueeze(0),
-                        gt_cls[i].unsqueeze(0),
-                        weight=cls_weights)
-                    l_org += F.mse_loss(
-                        torch.sigmoid(p_cls[i][3]),
-                        gt_orgs[i]
-                    )
+                    if use_aux_heads:
+                        # Weighted classification loss (origin is separate)
+                        l_cls += F.cross_entropy(
+                            p_cls[i][:3].unsqueeze(0),
+                            gt_cls[i].unsqueeze(0),
+                            weight=cls_weights)
+                        l_org += F.mse_loss(
+                            torch.sigmoid(p_cls[i][3]),
+                            gt_orgs[i]
+                        )
 
-                    # Regression loss only on non-background samples
-                    gt_reg_masked = torch.masked_select(gt_reg[i], gt_cls[i].gt(0))
-                    p_reg_masked = torch.masked_select(p_reg[i], gt_cls[i].gt(0))
-                    l_reg += F.mse_loss(p_reg_masked, gt_reg_masked)
+                        # Regression loss only on non-background samples
+                        gt_reg_masked = torch.masked_select(gt_reg[i], gt_cls[i].gt(0))
+                        p_reg_masked = torch.masked_select(p_reg[i], gt_cls[i].gt(0))
+                        l_reg += F.mse_loss(p_reg_masked, gt_reg_masked)
+                    else:
+                        l_cls.detach()
+                        l_reg.detach()
+                        l_org.detach()
 
-                    # Extract ground truth labels
-                    gt_org, gt_bars, gt_ticks = gt_maps_to_cls_lists(
-                        gt_orgs[i], gt_cls[i], gt_reg[i], sizes[i]
-                    )
-
-                    # Heatmap loss (UDP targets as in ViTPose)
+                    # Heatmap loss (MSE on gaussian targets)
                     if use_hm_loss:
+                        # Extract ground truth labels
+                        gt_org, gt_bars, gt_ticks = gt_maps_to_cls_lists(
+                            gt_orgs[i], gt_cls[i], gt_reg[i], sizes[i]
+                        )
+
                         gt_hm = build_slot_heatmaps(
                             gt_org,
                             gt_ticks,
@@ -401,12 +407,10 @@ def main(args, resume_preempt=False):
                             num_tick_slots=num_tick_slots,
                             sigma=hm_sigma
                         )
+
                         for k in range(num_hm_slots):
                             if gt_hm[k].max() > 0:
-                                gt_flat = gt_hm[k].reshape(-1)
-                                gt_prob = gt_flat / (gt_flat.sum() + 1e-6)
-                                log_probs = F.log_softmax(p_hm[i][k].reshape(-1), dim=0)
-                                l_hm += -(gt_prob * log_probs).sum()
+                                l_hm += F.mse_loss(p_hm[i][k], gt_hm[k])
                     else:
                         l_hm.detach()
 
@@ -415,9 +419,9 @@ def main(args, resume_preempt=False):
                 l_org /= (0.5 * batch_len)
                 l_cls /= (1.0 * batch_len)
                 l_reg /= (0.5 * batch_len)
-                l_hm /= (100.0 * batch_len)
+                l_hm /= (1.0 * batch_len)
 
-                loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
+                loss: torch.Tensor = l_hm if not use_aux_heads else (l_org + l_cls + l_reg + l_hm)
                 loss = AllReduce.apply(loss) # type: ignore
 
                 return loss, (
