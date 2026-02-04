@@ -242,7 +242,8 @@ def main(args, resume_preempt=False):
         ipe_scale=ipe_scale)
 
     if world_size != 1:
-        decoder = DistributedDataParallel(decoder)
+        find_unused = not (use_aux_heads and use_hm_loss)
+        decoder = DistributedDataParallel(decoder, find_unused_parameters=find_unused)
         encoder = DistributedDataParallel(encoder)
 
     # Encoder is frozen for decoder training
@@ -421,7 +422,7 @@ def main(args, resume_preempt=False):
                 l_reg /= (0.5 * batch_len)
                 l_hm /= (1.0 * batch_len)
 
-                loss: torch.Tensor = l_hm if not use_aux_heads else (l_org + l_cls + l_reg + l_hm)
+                loss: torch.Tensor =  l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
 
                 return loss, (
