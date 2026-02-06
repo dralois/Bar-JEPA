@@ -9,11 +9,11 @@ data:
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-cl-arp-t5
+  write_tag: kp-cl-arp-32
 keypoint:
   use_hm_loss: true
-  use_aux_heads: false
-  hm_slots: 64
+  use_aux_heads: true
+  hm_slots: 32
   tick_slots: 15
   hm_sigma: 1.0
   class_weights:
@@ -29,7 +29,7 @@ meta:
   finetune_epoch: 0
   use_bfloat16: true
 optimization:
-  epochs: 100
+  epochs: 30
   final_lr: 1.0e-05
   final_weight_decay: 0.1
   ipe_scale: 1.0
