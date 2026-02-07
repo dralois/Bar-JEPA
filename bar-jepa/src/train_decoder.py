@@ -411,13 +411,12 @@ def main(args, resume_preempt=False):
                         )
 
                         # Loss only for active slots
+                        loss_sum = torch.tensor(0., device=device)
                         for k in range(num_hm_slots):
                             if gt_hm[k].max() > 0:
                                 # Normalize by number of active slots
-                                l_hm += adaptive_wing_loss(
-                                    torch.sigmoid(p_hm[i][k]),
-                                    gt_hm[k]
-                                ) / (gt_ticks.shape[0] + gt_bars.shape[0] + 1)
+                                loss_sum += adaptive_wing_loss(p_hm[i][k], gt_hm[k])
+                        l_hm += loss_sum / (gt_ticks.shape[0] + gt_bars.shape[0] + 1)
                     else:
                         l_hm.detach()
 
@@ -425,8 +424,8 @@ def main(args, resume_preempt=False):
                 batch_len = max(1, len(sizes))
                 l_org /= (1.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
-                l_reg /= (0.5 * batch_len)
-                l_hm /= (0.1 * batch_len)
+                l_reg /= (0.1 * batch_len)
+                l_hm /= (0.5 * batch_len)
 
                 loss: torch.Tensor =  l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
@@ -454,6 +453,7 @@ def main(args, resume_preempt=False):
 
             # Backward & step
             if decoder.training:
+                optimizer.zero_grad(set_to_none=True)
                 if use_bfloat16:
                     scaler.scale(loss).backward()
                     scaler.step(optimizer)
@@ -461,7 +461,6 @@ def main(args, resume_preempt=False):
                 else:
                     loss.backward()
                     optimizer.step()
-                optimizer.zero_grad()
 
             return (all_losses, lr, wd)
 

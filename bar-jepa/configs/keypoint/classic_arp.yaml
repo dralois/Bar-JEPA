@@ -15,7 +15,7 @@ keypoint:
   use_aux_heads: true
   hm_slots: 32
   tick_slots: 15
-  hm_sigma: 2.0
+  hm_sigma: 1.0
   class_weights:
   - 0.05
   - 1.0
@@ -29,7 +29,7 @@ meta:
   finetune_epoch: 0
   use_bfloat16: true
 optimization:
-  epochs: 30
+  epochs: 40
   final_lr: 1.0e-05
   final_weight_decay: 0.1
   ipe_scale: 1.0
