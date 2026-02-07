@@ -183,7 +183,8 @@ def init_decoder_model(
     patch_size=16,
     crop_size=224,
     num_hm_slots=64,
-    decoder_type='simple'
+    decoder_type='simple',
+    use_aux_heads=True
 ):
     max_patches = (crop_size // patch_size) ** 2
     encoder = vit.__dict__[model_name](
@@ -194,7 +195,8 @@ def init_decoder_model(
         in_channels=encoder.num_features,
         num_hm_slots=num_hm_slots,
         num_classes=3,
-        decoder_type=decoder_type)
+        decoder_type=decoder_type,
+        use_aux_heads=use_aux_heads)
 
     def init_weights(m):
         if isinstance(m, torch.nn.Linear):

@@ -35,7 +35,8 @@ from src.utils.distributed import (
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
-    build_slot_heatmaps
+    build_slot_heatmaps,
+    adaptive_wing_loss
 )
 
 from src.utils.logging import (
@@ -178,7 +179,8 @@ def main(args, resume_preempt=False):
         patch_size=patch_size,
         crop_size=crop_size,
         num_hm_slots=num_hm_slots,
-        decoder_type=decoder_type)
+        decoder_type=decoder_type,
+        use_aux_heads=use_aux_heads)
 
     # -- make data transforms
     transform = make_transforms(
@@ -242,8 +244,7 @@ def main(args, resume_preempt=False):
         ipe_scale=ipe_scale)
 
     if world_size != 1:
-        find_unused = not (use_aux_heads and use_hm_loss)
-        decoder = DistributedDataParallel(decoder, find_unused_parameters=find_unused)
+        decoder = DistributedDataParallel(decoder)
         encoder = DistributedDataParallel(encoder)
 
     # Encoder is frozen for decoder training
@@ -371,7 +372,7 @@ def main(args, resume_preempt=False):
                 sizes = torch.tensor([c.shape for c in gt_cls], device=device)
 
                 # For each chart in batch individually
-                for i in range(len(p_cls)):
+                for i in range(len(sizes)):
                     if use_aux_heads:
                         # Weighted classification loss (origin is separate)
                         l_cls += F.cross_entropy(
@@ -379,7 +380,7 @@ def main(args, resume_preempt=False):
                             gt_cls[i].unsqueeze(0),
                             weight=cls_weights)
                         l_org += F.mse_loss(
-                            torch.sigmoid(p_cls[i][3]),
+                            p_cls[i][3],
                             gt_orgs[i]
                         )
 
@@ -409,18 +410,25 @@ def main(args, resume_preempt=False):
                             sigma=hm_sigma
                         )
 
+                        # Loss only for active slots
                         for k in range(num_hm_slots):
                             if gt_hm[k].max() > 0:
-                                l_hm += F.mse_loss(p_hm[i][k], gt_hm[k])
+                                l_hm += adaptive_wing_loss(
+                                    torch.sigmoid(p_hm[i][k]),
+                                    gt_hm[k]
+                                )
+
+                        # Normalize by number of active slots
+                        l_hm /= (gt_ticks.shape[0] + gt_bars.shape[0] + 1)
                     else:
                         l_hm.detach()
 
                 # Average over batch and apply weighting.
                 batch_len = max(1, len(p_cls))
-                l_org /= (0.5 * batch_len)
+                l_org /= (1.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
                 l_reg /= (0.5 * batch_len)
-                l_hm /= (1.0 * batch_len)
+                l_hm /= (0.1 * batch_len)
 
                 loss: torch.Tensor =  l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore

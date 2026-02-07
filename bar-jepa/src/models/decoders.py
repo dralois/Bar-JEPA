@@ -104,6 +104,7 @@ class KeypointDetector(nn.Module):
         num_classes=3,
         decoder_type='simple',
         init_std=0.02,
+        use_aux_heads=True
     ):
         """
         Combined keypoint detector with classification and regression heads.
@@ -113,6 +114,7 @@ class KeypointDetector(nn.Module):
         :param num_hm_slots: max. number of keypoints (-> heatmap slots).
         :param num_classes: number of keypoint classes (e.g. background, tick, bar).
         :param decoder_type: type of decoder ('simple' or 'classic').
+        :param use_aux_heads: whether to use auxiliary head or not
         """
         super().__init__()
 
@@ -121,6 +123,7 @@ class KeypointDetector(nn.Module):
         self.num_hm_slots = num_hm_slots
         self.num_classes = num_classes
         self.decoder_type = decoder_type
+        self.use_aux_heads = use_aux_heads
 
         # ViTPose-inspired decoders
         if decoder_type == 'simple':
@@ -130,16 +133,18 @@ class KeypointDetector(nn.Module):
         else:
             raise ValueError(f'Unknown decoder type {self.decoder_type}')
 
-        self.fc_cls = nn.Sequential(
-            nn.Conv2d(self.num_hm_slots, self.num_classes, 1, 1, 0)
-        ) # Predicts class probabilities
-        self.fc_org = nn.Sequential(
-            nn.Conv2d(self.num_hm_slots, 1, 1, 1, 0)
-        ) # Predicts origin probability
-        self.fc_reg = nn.Sequential(
-            nn.Conv2d(self.num_hm_slots, 2, 1, 1, 0),
-            nn.Tanh()
-        ) # Predicts (dx, dy) offsets
+        if self.use_aux_heads:
+            self.fc_cls = nn.Sequential(
+                nn.Conv2d(self.num_hm_slots, self.num_classes, 1, 1, 0)
+            ) # Predicts class probabilities
+            self.fc_org = nn.Sequential(
+                nn.Conv2d(self.num_hm_slots, 1, 1, 1, 0),
+                nn.Sigmoid()
+            ) # Predicts origin probability
+            self.fc_reg = nn.Sequential(
+                nn.Conv2d(self.num_hm_slots, 2, 1, 1, 0),
+                nn.Tanh()
+            ) # Predicts (dx, dy) offsets
 
         self.drop_layer = nn.Dropout(p=0.3)
 
@@ -193,16 +198,18 @@ class KeypointDetector(nn.Module):
             valid_x = self.decoder(valid_x)
             # Store heatmaps (one channel per keypoint slot)
             hm_preds.append(valid_x)
-            # Second dropout for heads
-            valid_x = self.drop_layer(valid_x)
 
-            # Decode class logits and offsets from latent features
-            cls_logits = self.fc_cls(valid_x)
-            org_logits = self.fc_org(valid_x)
-            reg = self.fc_reg(valid_x)
+            if self.use_aux_heads:
+                # Second dropout for heads
+                valid_x = self.drop_layer(valid_x)
 
-            # Store dense outputs
-            cls_preds.append(torch.cat([cls_logits, org_logits], dim=0))
-            reg_preds.append(reg)
+                # Decode class logits and offsets from latent features
+                cls_logits = self.fc_cls(valid_x)
+                org_logits = self.fc_org(valid_x)
+                reg = self.fc_reg(valid_x)
+
+                # Store dense outputs
+                cls_preds.append(torch.cat([cls_logits, org_logits], dim=0))
+                reg_preds.append(reg)
 
         return cls_preds, reg_preds, hm_preds
