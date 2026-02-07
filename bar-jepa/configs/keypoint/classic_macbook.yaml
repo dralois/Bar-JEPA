@@ -6,14 +6,14 @@ data:
   pin_mem: false
   root_path: ./data
   is_ubpmc: false
-  preserve_aspect_ratio: true
+  preserve_aspect_ratio: false
 logging:
   folder: ./output
   write_tag: keypoint
 keypoint:
   use_hm_loss: true
-  use_aux_heads: false
-  hm_slots: 64
+  use_aux_heads: true
+  hm_slots: 32
   tick_slots: 15
   hm_sigma: 1.0
   class_weights:

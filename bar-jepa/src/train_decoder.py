@@ -53,7 +53,7 @@ from src.helper import (
 
 # --
 log_timings = True
-log_freq = 5
+log_freq = 2
 checkpoint_freq = 10
 # --
 
@@ -413,18 +413,16 @@ def main(args, resume_preempt=False):
                         # Loss only for active slots
                         for k in range(num_hm_slots):
                             if gt_hm[k].max() > 0:
+                                # Normalize by number of active slots
                                 l_hm += adaptive_wing_loss(
                                     torch.sigmoid(p_hm[i][k]),
                                     gt_hm[k]
-                                )
-
-                        # Normalize by number of active slots
-                        l_hm /= (gt_ticks.shape[0] + gt_bars.shape[0] + 1)
+                                ) / (gt_ticks.shape[0] + gt_bars.shape[0] + 1)
                     else:
                         l_hm.detach()
 
                 # Average over batch and apply weighting.
-                batch_len = max(1, len(p_cls))
+                batch_len = max(1, len(sizes))
                 l_org /= (1.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
                 l_reg /= (0.5 * batch_len)
