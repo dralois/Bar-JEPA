@@ -4,16 +4,16 @@ data:
   patch_size: 14
   num_workers: 12
   pin_mem: true
-  root_path: ./data
+  root_path: ./data_decoder
   is_ubpmc: false
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-cl-arp-32
+  write_tag: kp-cl-arp
 keypoint:
   use_hm_loss: true
   use_aux_heads: true
-  hm_slots: 32
+  hm_slots: 64
   tick_slots: 15
   hm_sigma: 1.0
   class_weights:

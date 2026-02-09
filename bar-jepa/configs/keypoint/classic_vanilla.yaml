@@ -4,7 +4,7 @@ data:
   patch_size: 14
   num_workers: 12
   pin_mem: true
-  root_path: ./data
+  root_path: ./data_decoder
   is_ubpmc: false
   preserve_aspect_ratio: false
 logging:
@@ -29,8 +29,8 @@ meta:
   finetune_epoch: 0
   use_bfloat16: true
 optimization:
-  epochs: 100
-  final_lr: 1.0e-06
+  epochs: 40
+  final_lr: 1.0e-05
   final_weight_decay: 0.1
   ipe_scale: 1.0
   lr: 1.0e-03
