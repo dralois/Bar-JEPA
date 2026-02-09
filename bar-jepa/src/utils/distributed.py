@@ -21,7 +21,7 @@ def init_distributed(port=40112, rank_and_world_size=(None, None)):
         return dist.get_world_size(), dist.get_rank()
 
     rank, world_size = rank_and_world_size
-    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
 
     if (rank is None) or (world_size is None):
         try:
