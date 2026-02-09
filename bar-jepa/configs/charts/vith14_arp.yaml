@@ -47,10 +47,10 @@ optimization:
   - 0.996
   - 1.0
   epochs: 50
-  final_lr: 1.0e-06
-  final_weight_decay: 0.05
+  final_lr: 1e-06
+  final_weight_decay: 0.04
   ipe_scale: 1.0
-  lr: 1.0e-05
-  start_lr: 1.0e-06
-  warmup: 3
-  weight_decay: 0.05
+  lr: 5e-05
+  start_lr: 5e-06
+  warmup: 6
+  weight_decay: 0.02

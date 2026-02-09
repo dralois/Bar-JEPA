@@ -236,7 +236,8 @@ def main(args, resume_preempt=False):
             training=True,
             val_train_split=False,
             decoder_training=False,
-            drop_last=True)
+            drop_last=True,
+            shuffle=True)
     ipe = len(unsupervised_loader)
 
     # -- init optimizer and scheduler
