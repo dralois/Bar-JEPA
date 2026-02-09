@@ -6,11 +6,13 @@
 #
 
 import math
-from functools import partial
 import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from functools import partial
 
 from src.utils.tensors import (
     trunc_normal_,
@@ -72,8 +74,8 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 def interpolate_pos_encoding(x, pos_embed, grid_sizes):
     B, N, D = x.shape
     grid_h = grid_w = int(math.sqrt(pos_embed.shape[1]))
-    # Position embeddings [D, N] -> [1, D, sqrt(N), sqrt(N)]
-    pos_embed_2d = pos_embed.reshape(1, D, grid_h, grid_w)
+    # Position embeddings [1, N, D] -> [1, D, sqrt(N), sqrt(N)]
+    pos_embed_2d = pos_embed.reshape(1, grid_h, grid_w, D).permute(0, 3, 1, 2)
     output = torch.zeros(B, N, D, device=x.device)
 
     cache = {}
@@ -81,7 +83,8 @@ def interpolate_pos_encoding(x, pos_embed, grid_sizes):
         h, w = grid_sizes[i]
         key = (int(h), int(w))
         if key not in cache:
-            pos_embed_interp = nn.functional.interpolate(
+            # [1, D, sqrt(N), sqrt(N)] -> [1, D, h, w]
+            pos_embed_interp = F.interpolate(
                 pos_embed_2d,
                 size=(h, w),
                 mode='bicubic',
