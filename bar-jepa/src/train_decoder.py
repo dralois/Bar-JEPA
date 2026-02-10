@@ -410,12 +410,11 @@ def main(args, resume_preempt=False):
                             sigma=hm_sigma
                         )
 
-                        # Loss only for active slots
+                        # Loss for slots
                         loss_sum = torch.tensor(0., device=device)
                         for k in range(num_hm_slots):
-                            if gt_hm[k].max() > 0:
-                                # Normalize by number of active slots
-                                loss_sum += adaptive_wing_loss(p_hm[i][k], gt_hm[k])
+                            loss_sum += F.mse_loss(p_hm[i][k], gt_hm[k])
+                        # Normalize by number of active slots
                         l_hm += loss_sum / (gt_ticks.shape[0] + gt_bars.shape[0] + 1)
                     else:
                         l_hm.detach()
@@ -424,7 +423,7 @@ def main(args, resume_preempt=False):
                 batch_len = max(1, len(sizes))
                 l_org /= (1.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
-                l_reg /= (0.1 * batch_len)
+                l_reg /= (0.5 * batch_len)
                 l_hm /= (0.5 * batch_len)
 
                 loss: torch.Tensor =  l_org + l_cls + l_reg + l_hm
