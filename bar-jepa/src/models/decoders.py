@@ -104,8 +104,7 @@ class KeypointDetector(nn.Module):
         num_classes=3,
         decoder_type='simple',
         init_std=0.02,
-        use_aux_heads=True,
-        max_group_size: int | None = None
+        use_aux_heads=True
     ):
         """
         Combined keypoint detector with classification and regression heads.
@@ -116,7 +115,6 @@ class KeypointDetector(nn.Module):
         :param num_classes: number of keypoint classes (e.g. background, tick, bar).
         :param decoder_type: type of decoder ('simple' or 'classic').
         :param use_aux_heads: whether to use auxiliary head or not
-        :param max_group_size: max number of same-size grids processed together
         """
         super().__init__()
 
@@ -126,7 +124,6 @@ class KeypointDetector(nn.Module):
         self.num_classes = num_classes
         self.decoder_type = decoder_type
         self.use_aux_heads = use_aux_heads
-        self.max_group_size = max_group_size
 
         # ViTPose-inspired decoders
         if decoder_type == 'simple':
@@ -189,43 +186,31 @@ class KeypointDetector(nn.Module):
 
         for (H, W), idxs in grid_to_indices.items():
             num_patches = H * W
-            group_size = len(idxs)
+            # [B_g, N, C_in] -> [B_g, C_in, H, W], considering only valid patches
+            valid_x = x[idxs, :num_patches]
+            valid_x = valid_x.permute(0, 2, 1).contiguous().view(-1, x.size(2), H, W)
 
-            # Optionally, chunk large groups to cap peak memory usage.
-            if self.max_group_size is None or self.max_group_size <= 0:
-                group_slices = [idxs]
-            else:
-                group_slices = [
-                    idxs[i:i + self.max_group_size]
-                    for i in range(0, group_size, self.max_group_size)
-                ]
+            # First dropout before decoder
+            valid_x = self.drop_layer(valid_x)
+            # Get feature map from the decoder [B_g, C_out, H*4, W*4]
+            feat = self.decoder(valid_x)
+            # Scatter heatmaps back to the original batch order.
+            for j, idx in enumerate(idxs):
+                hm_preds[idx] = feat[j]
 
-            for idxs_chunk in group_slices:
-                # [B_g, N, C_in] -> [B_g, C_in, H, W], considering only valid patches
-                valid_x = x[idxs_chunk, :num_patches]
-                valid_x = valid_x.permute(0, 2, 1).contiguous().view(-1, x.size(2), H, W)
+            if self.use_aux_heads:
+                # Second dropout for heads
+                feat_heads = self.drop_layer(feat)
 
-                # First dropout before decoder
-                valid_x = self.drop_layer(valid_x)
-                # Get feature map from the decoder [B_g, C_out, H*4, W*4]
-                feat = self.decoder(valid_x)
-                # Scatter heatmaps back to the original batch order.
-                for j, idx in enumerate(idxs_chunk):
-                    hm_preds[idx] = feat[j]
+                # Decode class logits and offsets from latent features
+                cls_logits = self.fc_cls(feat_heads)
+                org_logits = self.fc_org(feat_heads)
+                reg = self.fc_reg(feat_heads)
 
-                if self.use_aux_heads:
-                    # Second dropout for heads
-                    feat_heads = self.drop_layer(feat)
-
-                    # Decode class logits and offsets from latent features
-                    cls_logits = self.fc_cls(feat_heads)
-                    org_logits = self.fc_org(feat_heads)
-                    reg = self.fc_reg(feat_heads)
-
-                    # Scatter dense outputs back to the original batch order.
-                    cls_cat = torch.cat([cls_logits, org_logits], dim=1)
-                    for j, idx in enumerate(idxs_chunk):
-                        cls_preds[idx] = cls_cat[j] # type: ignore
-                        reg_preds[idx] = reg[j]
+                # Scatter dense outputs back to the original batch order.
+                cls_cat = torch.cat([cls_logits, org_logits], dim=1)
+                for j, idx in enumerate(idxs):
+                    cls_preds[idx] = cls_cat[j] # type: ignore
+                    reg_preds[idx] = reg[j]
 
         return cls_preds, reg_preds, hm_preds # type: ignore
