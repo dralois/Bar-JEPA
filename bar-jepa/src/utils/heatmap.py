@@ -1,11 +1,5 @@
-import sys
-import logging
-
 import torch
 from typing import List, Tuple
-
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-logger = logging.getLogger()
 
 
 def adaptive_wing_loss(
@@ -14,10 +8,7 @@ def adaptive_wing_loss(
     alpha: float = 2.1,
     omega: float = 14.0,
     epsilon: float = 1.0,
-    theta: float = 0.5,
-    fg_thresh: float = 0.1,     # gt > fg_thresh considered foreground
-    fg_weight: float = 20.0,    # weight for keypoint regions
-    bg_weight: float = 1.0      # weight for background
+    theta: float = 0.5
 ) -> torch.Tensor:
     """
     Computes the adaptive wing loss between predictions and ground truth.
@@ -48,17 +39,8 @@ def adaptive_wing_loss(
         A * delta - C
     )
 
-    # Foreground/background weighting
-    weights = torch.where(
-        gt > fg_thresh,
-        torch.full_like(gt, fg_weight),
-        torch.full_like(gt, bg_weight)
-    )
+    return losses.mean()
 
-    weighted_loss = losses * weights
-
-    # Normalize by sum of weights to keep scale stable
-    return weighted_loss.sum() / (weights.sum() + 1e-6)
 
 def udp_decode_point(
     point: torch.Tensor,

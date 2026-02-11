@@ -379,7 +379,7 @@ def main(args, resume_preempt=False):
                             p_cls[i][:3].unsqueeze(0),
                             gt_cls[i].unsqueeze(0),
                             weight=cls_weights)
-                        l_org += F.mse_loss(
+                        l_org += adaptive_wing_loss(
                             torch.sigmoid(p_cls[i][3]),
                             gt_orgs[i]
                         )
@@ -393,13 +393,14 @@ def main(args, resume_preempt=False):
                         l_reg.detach()
                         l_org.detach()
 
-                    # Heatmap loss (MSE on gaussian targets)
+                    # Heatmap loss (adaptive wing on gaussian targets)
                     if use_hm_loss:
                         # Extract ground truth labels
                         gt_org, gt_bars, gt_ticks = gt_maps_to_cls_lists(
                             gt_orgs[i], gt_cls[i], gt_reg[i], sizes[i]
                         )
 
+                        # Build gaussian target heatmaps
                         gt_hm = build_slot_heatmaps(
                             gt_org,
                             gt_ticks,
@@ -414,7 +415,7 @@ def main(args, resume_preempt=False):
                         loss_sum = torch.tensor(0., device=device)
                         for k in range(num_hm_slots):
                             if gt_hm[k].max() > 0:
-                                loss_sum += F.mse_loss(
+                                loss_sum += adaptive_wing_loss(
                                     torch.sigmoid(p_hm[i][k]),
                                     gt_hm[k]
                                 )
@@ -442,7 +443,7 @@ def main(args, resume_preempt=False):
                 )
 
             # Forward
-            with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
+            with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16): # type: ignore
                 if decoder.training:
                     p_cls, p_reg, p_hm = forward()
                     loss_start = time.time()

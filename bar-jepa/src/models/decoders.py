@@ -173,27 +173,28 @@ class KeypointDetector(nn.Module):
             - predicted keypoint heatmaps, shape: B x [K, H x 4, W x 4]
         """
         batch_size = x.size(0)
-
-        # Pre-allocate outputs to preserve original order after grouping by grid size.
         cls_preds = [None] * batch_size
         reg_preds = [None] * batch_size
         hm_preds = [None] * batch_size
 
-        # Group indices by (H, W) to batch same-size grids through the decoder.
+        # Group indices by (H, W) to batch same-size grids through the decoder
         grid_to_indices = {}
         for i, (H, W) in enumerate(grids):
             grid_to_indices.setdefault((H, W), []).append(i)
 
+        # Batched forward pass for each group of grids with the same shape
         for (H, W), idxs in grid_to_indices.items():
             num_patches = H * W
+
             # [B_g, N, C_in] -> [B_g, C_in, H, W], considering only valid patches
             valid_x = x[idxs, :num_patches]
-            valid_x = valid_x.permute(0, 2, 1).contiguous().view(-1, x.size(2), H, W)
+            valid_x = valid_x.permute(0, 2, 1).reshape(-1, x.size(2), H, W)
 
             # First dropout before decoder
             valid_x = self.drop_layer(valid_x)
             # Get feature map from the decoder [B_g, C_out, H*4, W*4]
             feat = self.decoder(valid_x)
+
             # Scatter heatmaps back to the original batch order.
             for j, idx in enumerate(idxs):
                 hm_preds[idx] = feat[j]
