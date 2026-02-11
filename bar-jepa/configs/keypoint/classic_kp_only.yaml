@@ -6,13 +6,13 @@ data:
   pin_mem: true
   root_path: ./data_decoder
   is_ubpmc: false
-  preserve_aspect_ratio: false
+  preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-cl-vanilla
+  write_tag: kp-cl-kp-only
 keypoint:
   use_hm_loss: true
-  use_aux_heads: true
+  use_aux_heads: false
   hm_slots: 32
   tick_slots: 15
   hm_sigma: 1.0
@@ -24,7 +24,7 @@ meta:
   load_checkpoint: true
   model_name: vit_huge
   decoder_type: classic
-  read_checkpoint: model/jepa-vanilla.pth.tar
+  read_checkpoint: model/jepa-arp.pth.tar
   do_finetune: false
   finetune_epoch: 0
   use_bfloat16: true

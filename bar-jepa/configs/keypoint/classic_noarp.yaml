@@ -29,7 +29,7 @@ meta:
   finetune_epoch: 0
   use_bfloat16: true
 optimization:
-  epochs: 50
+  epochs: 40
   final_lr: 1.0e-05
   final_weight_decay: 0.1
   ipe_scale: 1.0
