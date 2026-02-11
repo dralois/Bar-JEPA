@@ -427,8 +427,8 @@ def main(args, resume_preempt=False):
                 batch_len = max(1, len(sizes))
                 l_org /= (1.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
-                l_reg /= (0.5 * batch_len)
-                l_hm /= (0.5 * batch_len)
+                l_reg /= (0.25 * batch_len)
+                l_hm /= (0.25 * batch_len)
 
                 loss: torch.Tensor =  l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore

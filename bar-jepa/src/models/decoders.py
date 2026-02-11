@@ -1,16 +1,10 @@
 from typing import Tuple, List
-from collections import Counter
-import logging
-import sys
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from src.utils.tensors import trunc_normal_
-
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-logger = logging.getLogger()
 
 
 class ClassicDecoder(nn.Module):
@@ -55,13 +49,13 @@ class ClassicDecoder(nn.Module):
         """
         Forward pass of the decoder.
 
-        :param x: input feature map from the backbone, shape: [1, C_in, H, W]
-        :return: estimated heatmap for keypoint, shape: [C_out, H*4, W*4]
+        :param x: input feature map from the backbone, shape: [B, C_in, H, W]
+        :return: estimated heatmap for keypoint, shape: [B, C_out, H*4, W*4]
         """
         # [1, C_in, H, W] -> [1, C_in, H*4, W*4]
         x = self.deconv_layers(x)
         # [1, C_in, H*4, W*4] -> [C_out, H*4, W*4]
-        return self.final_layer(x).squeeze(0)
+        return self.final_layer(x)
 
 
 class SimpleDecoder(nn.Module):
@@ -91,13 +85,13 @@ class SimpleDecoder(nn.Module):
         """
         Forward pass of the decoder.
 
-        :param x: input feature map from the backbone, shape: [1, C_in, H, W]
-        :return: estimated heatmap for keypoint, shape: [C_out, H*4, W*4]
+        :param x: input feature map from the backbone, shape: [B, C_in, H, W]
+        :return: estimated heatmap for keypoint, shape: [B, C_out, H*4, W*4]
         """
         # [1, C_in, H, W] -> [1, C_in, H*4, W*4]
         x = F.interpolate(F.relu_(x), scale_factor=4, mode='bilinear', align_corners=False)
         # [1, C_in, H*4, W*4] -> [C_out, H*4, W*4]
-        return self.final_layer(x).squeeze(0)
+        return self.final_layer(x)
 
 
 class KeypointDetector(nn.Module):
@@ -110,7 +104,8 @@ class KeypointDetector(nn.Module):
         num_classes=3,
         decoder_type='simple',
         init_std=0.02,
-        use_aux_heads=True
+        use_aux_heads=True,
+        max_group_size: int | None = None
     ):
         """
         Combined keypoint detector with classification and regression heads.
@@ -121,6 +116,7 @@ class KeypointDetector(nn.Module):
         :param num_classes: number of keypoint classes (e.g. background, tick, bar).
         :param decoder_type: type of decoder ('simple' or 'classic').
         :param use_aux_heads: whether to use auxiliary head or not
+        :param max_group_size: max number of same-size grids processed together
         """
         super().__init__()
 
@@ -130,6 +126,7 @@ class KeypointDetector(nn.Module):
         self.num_classes = num_classes
         self.decoder_type = decoder_type
         self.use_aux_heads = use_aux_heads
+        self.max_group_size = max_group_size
 
         # ViTPose-inspired decoders
         if decoder_type == 'simple':
@@ -178,43 +175,57 @@ class KeypointDetector(nn.Module):
             - predicted (dy, dx) offsets, shape: B x [2, H x 4, W x 4]
             - predicted keypoint heatmaps, shape: B x [K, H x 4, W x 4]
         """
-        cls_preds = []
-        reg_preds = []
-        hm_preds = []
+        batch_size = x.size(0)
 
-        if len(grids) > 0:
-            grid_counts = Counter(grids)
-            grid_counts_str = ", ".join(
-                f"{h}x{w}:{cnt}" for (h, w), cnt in grid_counts.items()
-            )
-            logger.info("Grids: %s", grid_counts_str)
+        # Pre-allocate outputs to preserve original order after grouping by grid size.
+        cls_preds = [None] * batch_size
+        reg_preds = [None] * batch_size
+        hm_preds = [None] * batch_size
 
-        for i in range(x.size(0)):
-            H, W = grids[i]
+        # Group indices by (H, W) to batch same-size grids through the decoder.
+        grid_to_indices = {}
+        for i, (H, W) in enumerate(grids):
+            grid_to_indices.setdefault((H, W), []).append(i)
+
+        for (H, W), idxs in grid_to_indices.items():
             num_patches = H * W
+            group_size = len(idxs)
 
-            # [1, N, C_in] -> [1, C_in, H, W], considering only valid patches
-            valid_x = x[i, :num_patches]
-            valid_x = valid_x.permute(1, 0).view(1, -1, H, W)
+            # Optionally, chunk large groups to cap peak memory usage.
+            if self.max_group_size is None or self.max_group_size <= 0:
+                group_slices = [idxs]
+            else:
+                group_slices = [
+                    idxs[i:i + self.max_group_size]
+                    for i in range(0, group_size, self.max_group_size)
+                ]
 
-            # First dropout before decoder
-            valid_x = self.drop_layer(valid_x)
-            # Get feature map from the decoder [C_out, H*4, W*4]
-            valid_x = self.decoder(valid_x)
-            # Store heatmaps (one channel per keypoint slot)
-            hm_preds.append(valid_x)
+            for idxs_chunk in group_slices:
+                # [B_g, N, C_in] -> [B_g, C_in, H, W], considering only valid patches
+                valid_x = x[idxs_chunk, :num_patches]
+                valid_x = valid_x.permute(0, 2, 1).contiguous().view(-1, x.size(2), H, W)
 
-            if self.use_aux_heads:
-                # Second dropout for heads
+                # First dropout before decoder
                 valid_x = self.drop_layer(valid_x)
+                # Get feature map from the decoder [B_g, C_out, H*4, W*4]
+                feat = self.decoder(valid_x)
+                # Scatter heatmaps back to the original batch order.
+                for j, idx in enumerate(idxs_chunk):
+                    hm_preds[idx] = feat[j]
 
-                # Decode class logits and offsets from latent features
-                cls_logits = self.fc_cls(valid_x)
-                org_logits = self.fc_org(valid_x)
-                reg = self.fc_reg(valid_x)
+                if self.use_aux_heads:
+                    # Second dropout for heads
+                    feat_heads = self.drop_layer(feat)
 
-                # Store dense outputs
-                cls_preds.append(torch.cat([cls_logits, org_logits], dim=0))
-                reg_preds.append(reg)
+                    # Decode class logits and offsets from latent features
+                    cls_logits = self.fc_cls(feat_heads)
+                    org_logits = self.fc_org(feat_heads)
+                    reg = self.fc_reg(feat_heads)
 
-        return cls_preds, reg_preds, hm_preds
+                    # Scatter dense outputs back to the original batch order.
+                    cls_cat = torch.cat([cls_logits, org_logits], dim=1)
+                    for j, idx in enumerate(idxs_chunk):
+                        cls_preds[idx] = cls_cat[j] # type: ignore
+                        reg_preds[idx] = reg[j]
+
+        return cls_preds, reg_preds, hm_preds # type: ignore
