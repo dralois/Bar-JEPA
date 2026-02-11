@@ -11,6 +11,7 @@ Notes:
 - Fine-tuning ignores annotations (self-supervised).
 - Evaluation is WIP; supported datasets are UBPMC + generated charts.
 - Variable-resolution inputs are supported; batching happens after mask packing.
+- Decoder forward groups same-size grids for batched deconv (no padding/chunking).
 
 ## Key scripts
 - Data generation: `bar-gen/generator.py`
@@ -25,6 +26,7 @@ Notes:
 - Mask collator outputs boolean masks as `[B x nmasks]`, each mask length = `max_patches` (padding is masked).
 - `pack_by_masks` compacts tokens and returns an attention mask (True = valid tokens).
 - Encoder/predictor use attention masks to ignore padding + masked tokens.
+- Keypoint decoder groups indices by `(H, W)` and runs deconvs batched per group; outputs are scattered back to per-image lists.
 
 ## Config notes
 - Warmup is in epochs: `warmup_steps = warmup * iterations_per_epoch`.
