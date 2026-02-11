@@ -1,10 +1,16 @@
 from typing import Tuple, List
+from collections import Counter
+import logging
+import sys
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from src.utils.tensors import trunc_normal_
+
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+logger = logging.getLogger()
 
 
 class ClassicDecoder(nn.Module):
@@ -134,17 +140,9 @@ class KeypointDetector(nn.Module):
             raise ValueError(f'Unknown decoder type {self.decoder_type}')
 
         if self.use_aux_heads:
-            self.fc_cls = nn.Sequential(
-                nn.Conv2d(self.num_hm_slots, self.num_classes, 1, 1, 0)
-            ) # Predicts class probabilities
-            self.fc_org = nn.Sequential(
-                nn.Conv2d(self.num_hm_slots, 1, 1, 1, 0),
-                nn.Sigmoid()
-            ) # Predicts origin probability
-            self.fc_reg = nn.Sequential(
-                nn.Conv2d(self.num_hm_slots, 2, 1, 1, 0),
-                nn.Tanh()
-            ) # Predicts (dx, dy) offsets
+            self.fc_cls = nn.Conv2d(self.num_hm_slots, self.num_classes, 1, 1, 0)   # Predicts class probabilities
+            self.fc_org = nn.Conv2d(self.num_hm_slots, 1, 1, 1, 0)                  # Predicts origin probability
+            self.fc_reg = nn.Conv2d(self.num_hm_slots, 2, 1, 1, 0)                  # Predicts (dx, dy) offsets
 
         self.drop_layer = nn.Dropout(p=0.3)
 
@@ -183,6 +181,13 @@ class KeypointDetector(nn.Module):
         cls_preds = []
         reg_preds = []
         hm_preds = []
+
+        if len(grids) > 0:
+            grid_counts = Counter(grids)
+            grid_counts_str = ", ".join(
+                f"{h}x{w}:{cnt}" for (h, w), cnt in grid_counts.items()
+            )
+            logger.info("Grids: %s", grid_counts_str)
 
         for i in range(x.size(0)):
             H, W = grids[i]

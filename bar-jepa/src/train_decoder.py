@@ -380,7 +380,7 @@ def main(args, resume_preempt=False):
                             gt_cls[i].unsqueeze(0),
                             weight=cls_weights)
                         l_org += F.mse_loss(
-                            p_cls[i][3],
+                            torch.sigmoid(p_cls[i][3]),
                             gt_orgs[i]
                         )
 
@@ -413,7 +413,11 @@ def main(args, resume_preempt=False):
                         # Loss for slots
                         loss_sum = torch.tensor(0., device=device)
                         for k in range(num_hm_slots):
-                            loss_sum += F.mse_loss(p_hm[i][k], gt_hm[k])
+                            if gt_hm[k].max() > 0:
+                                loss_sum += F.mse_loss(
+                                    torch.sigmoid(p_hm[i][k]),
+                                    gt_hm[k]
+                                )
                         # Normalize by number of active slots
                         l_hm += loss_sum / (gt_ticks.shape[0] + gt_bars.shape[0] + 1)
                     else:
