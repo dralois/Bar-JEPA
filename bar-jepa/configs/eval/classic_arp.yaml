@@ -8,14 +8,21 @@ data:
   is_ubpmc: false
   preserve_aspect_ratio: true
 keypoint:
-  hm_slots: 64
+  use_aux_heads: true
+  hm_slots: 32
   tick_slots: 15
   hm_sigma: 1.0
   pnt_detect_thresh: 0.9
   cls_conf_thresh: 0.75
   eval_thresh: 1.5
+logging:
+  folder: ./output
+  write_tag: eval_classic_arp
+ocr:
+  enabled: true
+  language: en
+  rec_model: latin_PP-OCRv5_mobile_rec
 meta:
   model_name: vit_huge
   decoder_type: classic
-  read_checkpoint: ./output/kp-cl-arp-t6-ep100.pth.tar
-  use_bfloat16: true
+  read_checkpoint: ./output/kp-cl-arp-latest.pth.tar

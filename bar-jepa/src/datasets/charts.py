@@ -141,12 +141,13 @@ class Charts(torchvision.datasets.DatasetFolder):
         ann_path = self.data_paths[idx][1]
 
         # -- Image
-        img = Image.open(img_path).convert('RGB')
-        img = self.transform(img)
+        img_pil = Image.open(img_path).convert('RGB')
+        full_img = PILToTensor()(img_pil)
+        img = self.transform(img_pil)
 
         # If not decoder training, ignore annotations
         if not self.decoder_training:
-            return img, 0
+            return img, full_img, 0
 
         # -- Annotations
         ann = json.load(open(ann_path))
@@ -171,4 +172,4 @@ class Charts(torchvision.datasets.DatasetFolder):
         # Generate class and regression maps
         gt_org, gt_cls, gt_reg = cls_pts_to_maps([bars, ticks], org, mapsize)
 
-        return img, (gt_org, gt_cls, gt_reg)
+        return img, full_img, (gt_org, gt_cls, gt_reg)

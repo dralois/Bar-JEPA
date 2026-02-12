@@ -1,6 +1,9 @@
 import torch
 import torch.nn.functional as F
+
 from typing import List, Tuple
+
+from scipy.optimize import linear_sum_assignment
 
 
 def adaptive_wing_loss(
@@ -60,7 +63,7 @@ def adaptive_wing_loss(
     return losses.mean()
 
 
-def udp_decode_point(
+def udp_encode_point(
     point: torch.Tensor,
     size: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -80,7 +83,7 @@ def udp_decode_point(
     return idx, reg
 
 
-def udp_encode_point(
+def udp_decode_point(
     idx: torch.Tensor,
     reg: torch.Tensor,
     size: torch.Tensor
@@ -162,7 +165,7 @@ def cls_pts_to_maps(
     for cls_id, cls_list in enumerate(cls_pts_lists):
         for point in cls_list:
             # Compute map coordinates and regression values
-            pos, reg = udp_decode_point(point, mapsize)
+            pos, reg = udp_encode_point(point, mapsize)
 
             # Store in maps
             cls_map[pos[0], pos[1]] = cls_id + 1
@@ -180,7 +183,7 @@ def cls_pts_to_maps(
             org_coord - org_point.to(dtype=torch.float32) - 0.5
         )
     else:
-        org_idx, org_reg = udp_decode_point(origin, mapsize)
+        org_idx, org_reg = udp_encode_point(origin, mapsize)
         org_map[org_idx[0], org_idx[1]] = 1.0
         reg_map[:, org_idx[0], org_idx[1]] = org_reg
 
@@ -271,12 +274,12 @@ def gt_maps_to_cls_lists(
     org_point = torch.stack(torch.unravel_index(org_idx, gt_org.shape)).unsqueeze(0)
 
     # UDP: use pixel index + offset + 0.5, then normalize by (size - 1)
-    pos = udp_encode_point(
+    pos = udp_decode_point(
         points,
         gt_reg[:, points[:, 0], points[:, 1]].T,
         size
     )
-    org = udp_encode_point(
+    org = udp_decode_point(
         org_point,
         gt_reg[:, org_point[:, 0], org_point[:, 1]].T,
         size
@@ -298,7 +301,7 @@ def p_maps_to_cls_lists(
     size: torch.Tensor,
     bg_conf_thresh: float,
     cls_conf_thresh: float
-) -> Tuple[List[torch.Tensor], List[torch.Tensor], torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Extracts and processes predicted bars, ticks & origin
     from classification and regression maps.
@@ -310,161 +313,182 @@ def p_maps_to_cls_lists(
     :param cls_conf_thresh: classification confidence threshold
     :return: tuple containing:
 
-        - lists of [[y, x], confidence] for predicted bars
-        - lists of [[y, x]], confidence] for predicted ticks
+        - predicted bars [y, x, conf], shape [N, 3]
+        - predicted ticks [y, x, conf], shape [M, 3]
         - [y, x] for predicted coordinate system origin
     """
 
-    bars = []
-    ticks = []
-
     # Mask out parts that very likely are background
     pts_mask = torch.sigmoid(p_cls[0]).lt(bg_conf_thresh)
+    bar_scores = torch.sigmoid(p_cls[1])
+    tick_scores = torch.sigmoid(p_cls[2])
 
     # Select high confidence candidates from background-masked bars heatmap
-    masked_bars = (torch.sigmoid(p_cls[1]) * pts_mask).gt(cls_conf_thresh)
-    for point in torch.nonzero(masked_bars):
-        # UDP: pixel index + offset + 0.5, normalize by (size - 1)
-        pos = udp_encode_point(point, p_reg[:, point[0], point[1]], size)
-        # Store image space prediction and confidence for bar
-        conf = torch.sigmoid(p_cls[1, point[0], point[1]])
-        bars.append((pos, conf))
+    bar_idx = torch.nonzero(pts_mask & bar_scores.gt(cls_conf_thresh))
+    if bar_idx.numel() > 0:
+        bar_reg = p_reg[:, bar_idx[:, 0], bar_idx[:, 1]].T
+        bar_pos = udp_decode_point(bar_idx, bar_reg, size)
+        bar_conf = bar_scores[bar_idx[:, 0], bar_idx[:, 1]]
+        bars = torch.cat((bar_pos, bar_conf.unsqueeze(1)), dim=1)
+    else:
+        bars = p_reg.new_empty((0, 3))
 
     # Select high confidence candidates from background-masked ticks heatmap
-    masked_ticks = (torch.sigmoid(p_cls[2]) * pts_mask).gt(cls_conf_thresh)
-    for point in torch.nonzero(masked_ticks):
-        # UDP: pixel index + offset + 0.5, normalize by (size - 1)
-        pos = udp_encode_point(point, p_reg[:, point[0], point[1]], size)
-        # Store image space prediction and confidence for tick
-        conf = torch.sigmoid(p_cls[2, point[0], point[1]])
-        ticks.append((pos, conf))
+    tick_idx = torch.nonzero(pts_mask & tick_scores.gt(cls_conf_thresh))
+    if tick_idx.numel() > 0:
+        tick_reg = p_reg[:, tick_idx[:, 0], tick_idx[:, 1]].T
+        tick_pos = udp_decode_point(tick_idx, tick_reg, size)
+        tick_conf = tick_scores[tick_idx[:, 0], tick_idx[:, 1]]
+        ticks = torch.cat((tick_pos, tick_conf.unsqueeze(1)), dim=1)
+    else:
+        ticks = p_reg.new_empty((0, 3))
 
     # Select highest confidence candidate from background-masked origin heatmap
     org_idx = torch.argmax(torch.sigmoid(p_cls[3]) * pts_mask)
     org_point = torch.stack(torch.unravel_index(org_idx, p_cls[3].shape))
-    org_pos = udp_encode_point(org_point, p_reg[:, org_point[0], org_point[1]], size)
+    org_pos = udp_decode_point(org_point, p_reg[:, org_point[0], org_point[1]], size)
 
     return bars, ticks, org_pos
 
 
 def nms(
-    p_bars: List[Tuple[torch.Tensor, torch.Tensor]],
-    p_ticks: List[Tuple[torch.Tensor, torch.Tensor]],
+    p_bars: torch.Tensor,
+    p_ticks: torch.Tensor,
     radius_thresh: float
-) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Performs non-maximum suppression on predicted bars and ticks.
 
-    :param p_bars: list of (position, shape: [2], confidence) for predicted bars
-    :param p_ticks: list of (position, shape: [2], confidence) for predicted ticks
+    :param p_bars: predicted bars [y, x, conf], shape [N, 3]
+    :param p_ticks: predicted ticks [y, x, conf], shape [M, 3]
     :param radius_thresh: threshold distance for considering points as neighbors
     :return: tuple containing:
 
-        - list of nms filtered bars
-        - list of nms filtered ticks
+        - nms filtered bars [y, x, conf], shape [N, 3]
+        - nms filtered ticks [y, x, conf], shape [M, 3]
     """
-    nms_bars = []
-    nms_ticks = []
+    bar_out = p_bars.new_empty((0, 3))
+    tick_out = p_ticks.new_empty((0, 3))
 
     # Sort bars by confidence
-    if len(p_bars) > 0:
-        sorted_bar_pts = sorted(p_bars, key=lambda p: -p[1])
-        all_bar_pts = torch.stack([p for p, _ in sorted_bar_pts])
-        checked_bar_pts = []
+    if p_bars.size(0) > 0:
+        sorted_bars = p_bars[torch.argsort(p_bars[:, 2], descending=True)]
+        checked_bars = torch.zeros(sorted_bars.size(0), dtype=torch.bool, device=sorted_bars.device)
+        keep_bars = torch.zeros_like(checked_bars)
+
         # Iteratively remove low confidence bars within radius
-        for k, (pt, conf) in enumerate(sorted_bar_pts):
-            if k in checked_bar_pts:
+        for k in range(sorted_bars.size(0)):
+            if checked_bars[k]:
                 continue
+            pt = sorted_bars[k]
             # Anisotropic radius for bars, more reach in width direction
-            distances = torch.abs(all_bar_pts[:, 0] - pt[0]) / 5. + torch.abs(all_bar_pts[:, 1] - pt[1])
-            neighbor_idx = torch.nonzero(distances < radius_thresh).squeeze(1).tolist()
-            # Update checked points and maximum points
-            checked_bar_pts.extend(neighbor_idx)
-            nms_bars.append(pt)
+            distances = torch.abs(sorted_bars[:, 0] - pt[0]) + (torch.abs(sorted_bars[:, 1] - pt[1]) / 5.)
+            checked_bars |= distances.lt(radius_thresh)
+            keep_bars[k] = True
+
+        bar_out = sorted_bars[keep_bars]
 
     # Sort ticks by confidence
-    if len(p_ticks) > 0:
-        sorted_tick_pts = sorted(p_ticks, key=lambda p: -p[1])
-        all_tick_pts = torch.stack([p for p, _ in sorted_tick_pts])
-        checked_tick_pts = []
-        # Iteratively remove low confidence ticks within radius
-        for k, (pt, conf) in enumerate(sorted_tick_pts):
-            if k in checked_tick_pts:
-                continue
-            # Equal radius for ticks
-            distances = torch.abs(all_tick_pts[:, 0] - pt[0]) + torch.abs(all_tick_pts[:, 1] - pt[1])
-            neighbor_idx = torch.nonzero(distances < radius_thresh).squeeze(1).tolist()
-            # Update checked points and maximum points
-            checked_tick_pts.extend(neighbor_idx)
-            nms_ticks.append(pt)
+    if p_ticks.size(0) > 0:
+        sorted_ticks = p_ticks[torch.argsort(p_ticks[:, 2], descending=True)]
+        checked_ticks = torch.zeros(sorted_ticks.size(0), dtype=torch.bool, device=sorted_ticks.device)
+        keep_ticks = torch.zeros_like(checked_ticks)
 
-    return nms_bars, nms_ticks
+        # Iteratively remove low confidence ticks within radius
+        for k in range(sorted_ticks.size(0)):
+            if checked_ticks[k]:
+                continue
+            pt = sorted_ticks[k]
+            # Equal radius for ticks
+            distances = torch.abs(sorted_ticks[:, 0] - pt[0]) + torch.abs(sorted_ticks[:, 1] - pt[1])
+            checked_ticks |= distances.lt(radius_thresh)
+            keep_ticks[k] = True
+
+        tick_out = sorted_ticks[keep_ticks]
+
+    return bar_out, tick_out
 
 
 def evaluate_gt_p_match(
     gt_bars: torch.Tensor,
     gt_ticks: torch.Tensor,
-    p_bars: List[torch.Tensor],
-    p_ticks: List[torch.Tensor],
+    p_bars: torch.Tensor,
+    p_ticks: torch.Tensor,
     dist_thresh: float
-) -> Tuple[float, float, float, float]:
+) -> Tuple[float, float, float, float, float, float]:
     """
     Evaluate predicted bars and ticks against ground truth.
 
-    :param gt_bars: ground truth bar positions, shape [n, 2]
-    :param gt_ticks: ground truth tick positions, shape [m, 2]
-    :param p_bars: list of predicted bar positions, shape [2]
-    :param p_ticks: list of predicted tick positions, shape [2]
-    :param dist_thresh: distance threshold for considering a match
-    :param eval: flag indicating which metrics to compute
+    :param gt_bars: ground truth bar positions, shape [N, 2]
+    :param gt_ticks: ground truth tick positions, shape [M, 2]
+    :param p_bars: predicted bars [y, x, conf], shape [N, 3]
+    :param p_ticks: predicted ticks [y, x, conf], shape [M, 3]
+    :param dist_thresh: max. distance threshold when considering matches
     :return: Tuple containing:
 
-        - bar precision & recall
-        - tick precision & recall
+        - bar precision, recall, f1
+        - tick precision, recall, f1
     """
 
-    # Helper function, calculates distance to closest p for each gt, or 0 if none exists
-    def closest_match(gt_elems, p_elems):
-        if len(p_elems) > 0:
-            # Calculate pairwise distances
-            g_comp = gt_elems.unsqueeze(1)                              # [n_gt, 1, 2]
-            p_comp = torch.stack(p_elems).unsqueeze(0)                  # [1, n_p, 2]
-            distances = torch.sqrt(((g_comp - p_comp) ** 2).sum(dim=2)) # [n_gt, n_p]
-
-            # Create matches mask
-            matches = (distances < dist_thresh)
-
-            # Calculate distances for each ground truth element (inf mask non-matches)
-            distances = distances.masked_fill(~matches, float('inf'))
-            min_dists, _ = torch.min(distances, dim=1)
-
-            # Set min distance to 0 if no matches were found
-            min_dists = torch.where(matches.any(dim=1), min_dists, torch.zeros_like(min_dists))
-
-            # Return number of matching elements
-            return matches.sum().item()
-        else:
-            # No predictions, no matches
+    def closest_match(gt_elems: torch.Tensor, p_elems: torch.Tensor) -> int:
+        if gt_elems.size(0) == 0 or p_elems.size(0) == 0:
             return 0
+
+        # Pairwise distances between gt and predicted coords
+        diffs = gt_elems.unsqueeze(1) - p_elems[:, :2].unsqueeze(0)
+        distances = torch.sqrt((diffs * diffs).sum(dim=2))
+
+        # Distances above threshold are not valid matches
+        invalid = distances.gt(dist_thresh)
+        if invalid.all():
+            return 0
+
+        # Coordinates in [0, 1], so max distance is sqrt(2)
+        large_cost = (2.0 ** 0.5) + 1e-06
+        cost = distances.masked_fill(invalid, large_cost)
+
+        # Perform Hungarian matching
+        row_idx, col_idx = linear_sum_assignment(cost.detach().cpu().numpy())
+        if len(row_idx) == 0:
+            return 0
+
+        # Keep only assignments that are within the distance threshold
+        row_idx_t = torch.as_tensor(row_idx, device=distances.device, dtype=torch.long)
+        col_idx_t = torch.as_tensor(col_idx, device=distances.device, dtype=torch.long)
+        return int(distances[row_idx_t, col_idx_t].le(dist_thresh).sum().item())
 
     # Calculate matches for ticks & bars
     bar_matches = closest_match(gt_bars, p_bars)
     tick_matches = closest_match(gt_ticks, p_ticks)
 
     # Calculate precision and recall for bars
-    bar_precision = (bar_matches / len(p_bars)) if len(p_bars) > 0 else 0.
-    bar_recall = (bar_matches / len(gt_bars)) if len(gt_bars) > 0 else 0.
+    bar_precision = (bar_matches / p_bars.size(0)) if p_bars.size(0) > 0 else 0.
+    bar_recall = (bar_matches / gt_bars.size(0)) if gt_bars.size(0) > 0 else 0.
+    bar_f1 = f1(bar_precision, bar_recall)
 
     # Calculate precision and recall for ticks
-    tick_precision = (tick_matches / len(p_ticks)) if len(p_ticks) > 0 else 0.
-    tick_recall = (tick_matches / len(gt_ticks)) if len(gt_ticks) > 0 else 0.
+    tick_precision = (tick_matches / p_ticks.size(0)) if p_ticks.size(0) > 0 else 0.
+    tick_recall = (tick_matches / gt_ticks.size(0)) if gt_ticks.size(0) > 0 else 0.
+    tick_f1 = f1(tick_precision, tick_recall)
 
     # Return all metrics
-    return bar_precision, bar_recall, tick_precision, tick_recall
+    return bar_precision, bar_recall, bar_f1, tick_precision, tick_recall, tick_f1
 
 
 def f1(
     precision: float,
     recall: float
 ) -> float:
-    return (2. * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.
+    """
+    Computes the F1 score from precision and recall.
+
+    :param precision: precision value
+    :param recall: recall value
+    :return: F1 score
+    """
+    denominator = precision + recall
+    if denominator <= 0:
+        return 0.0
+
+    numerator = 2.0 * precision * recall
+    return numerator / denominator

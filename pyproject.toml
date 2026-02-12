@@ -1,9 +1,26 @@
 [project]
 authors = [{name = "Alexander Epple", email = "alexander.epple@uni-ulm.de"}]
-dependencies = []
-name = "codebase"
+name = "bar-jepa"
 requires-python = ">= 3.11"
 version = "0.1.0"
+dependencies = [
+  "wandb>=0.23.1,<0.24",
+  "pyyaml>=6.0.3,<7",
+  "numpy>=2.4.1,<3",
+  "matplotlib>=3.10.8,<4",
+  "jsonschema>=4.26.0,<5",
+  "tqdm>=4.67.1,<5",
+  "pillow>=12.1.0,<13",
+  "scipy>=1.17.0,<2",
+  "paddleocr>=2.10.0,<3",
+  "paddlepaddle>=3.0.0,<4"
+]
+
+[project.optional-dependencies]
+torch = [
+  "torch>=2.3.1,<2.7",
+  "torchvision>=0.18.1,<0.22"
+]
 
 [build-system]
 build-backend = "hatchling.build"
@@ -24,6 +41,7 @@ matplotlib = ">=3.10.8,<4"
 jsonschema = ">=4.26.0,<5"
 tqdm = ">=4.67.1,<5"
 pillow = ">=12.1.0,<13"
+scipy = ">=1.17.0,<2"
 
 [tool.pixi.target.osx-arm64.dependencies]
 pytorch = "2.6.*"

@@ -154,9 +154,10 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
         img_path = self.data_paths[idx][0]
         ann_path = self.data_paths[idx][1]
 
-        img = Image.open(img_path).convert('RGB')
-        size = torch.tensor(img.size)
-        img = self.transform(img)
+        img_pil = Image.open(img_path).convert('RGB')
+        full_img = PILToTensor()(img_pil)
+        size = torch.tensor(img_pil.size)
+        img = self.transform(img_pil)
 
         with open(ann_path, 'r') as f:
             ann = json.load(f)
@@ -236,4 +237,4 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
         # Generate class and regression maps
         gt_org, gt_cls, gt_reg = cls_pts_to_maps([bars, ticks], org_t, mapsize)
 
-        return img, (gt_org, gt_cls, gt_reg)
+        return img, full_img, (gt_org, gt_cls, gt_reg)

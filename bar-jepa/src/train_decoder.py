@@ -381,7 +381,8 @@ def main(args, resume_preempt=False):
                             weight=cls_weights)
                         l_org += adaptive_wing_loss(
                             torch.sigmoid(p_cls[i][3]),
-                            gt_orgs[i]
+                            gt_orgs[i],
+                            use_weight_map=False
                         )
 
                         # Regression loss only on non-background samples
@@ -416,7 +417,8 @@ def main(args, resume_preempt=False):
                         for k in range(num_hm_slots):
                             loss_sum += adaptive_wing_loss(
                                 torch.sigmoid(p_hm[i][k]),
-                                gt_hm[k]
+                                gt_hm[k],
+                                use_weight_map=False
                             )
                         # Normalize by number of slots
                         l_hm += loss_sum / num_hm_slots
@@ -425,7 +427,7 @@ def main(args, resume_preempt=False):
 
                 # Average over batch and apply weighting
                 batch_len = max(1, len(sizes))
-                l_org /= (5.0 * batch_len)
+                l_org /= (10.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
                 l_reg /= (0.1 * batch_len)
                 l_hm /= (2.0 * batch_len)
@@ -502,12 +504,12 @@ def main(args, resume_preempt=False):
         # Train loop
         decoder.train()
         last_lr, last_wd = 0., 0.
-        for itr, (data, targets) in enumerate(train_loader):
+        for itr, (data, _, targets) in enumerate(train_loader):
             last_lr, last_wd = iteration_wrapper(itr, data, targets, True)
 
         # Validation loop
         decoder.eval()
-        for itr, (data, targets) in enumerate(val_loader):
+        for itr, (data, _, targets) in enumerate(val_loader):
             iteration_wrapper(itr, data, targets, False)
 
         # -- Save Checkpoint after every epoch
