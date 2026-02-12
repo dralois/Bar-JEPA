@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from typing import List, Tuple
 
 
@@ -8,14 +9,19 @@ def adaptive_wing_loss(
     alpha: float = 2.1,
     omega: float = 14.0,
     epsilon: float = 1.0,
-    theta: float = 0.5
+    theta: float = 0.5,
+    use_weight_map: bool = True,
+    weight_w: float = 10.0,
+    weight_thresh: float = 0.2,
+    weight_dilation: int = 3
 ) -> torch.Tensor:
     """
     Computes the adaptive wing loss between predictions and ground truth.
 
-    :param pred: predicted values
-    :param gt: ground truth values
-    :return: Mean loss value across all elements
+    :param pred: predicted heatmap, values in [0, 1]
+    :param gt: ground truth heatmap, values in [0, 1]
+    :param use_weight_map: whether to apply a weighted loss map
+    :return: Mean loss across all elements
     """
     delta = (gt - pred).abs()
 
@@ -38,6 +44,18 @@ def adaptive_wing_loss(
         omega * torch.log(1 + torch.pow(delta / epsilon, alpha - gt)),
         A * delta - C
     )
+
+    # Weighted loss map
+    if use_weight_map:
+        x = gt.unsqueeze(0).unsqueeze(0)
+        pad = weight_dilation // 2
+        # Gray dilation of ground truth heatmap to include hard background
+        gt_dilated = F.max_pool2d(x, kernel_size=weight_dilation, stride=1, padding=pad)
+        # Threshold to build binary mask
+        mask = (gt_dilated >= weight_thresh).to(dtype=gt.dtype)
+        # Scale loss
+        wmap = weight_w * mask + 1.0
+        losses = losses * wmap.squeeze(0).squeeze(0)
 
     return losses.mean()
 

@@ -414,22 +414,21 @@ def main(args, resume_preempt=False):
                         # Loss for slots
                         loss_sum = torch.tensor(0., device=device)
                         for k in range(num_hm_slots):
-                            if gt_hm[k].max() > 0:
-                                loss_sum += adaptive_wing_loss(
-                                    torch.sigmoid(p_hm[i][k]),
-                                    gt_hm[k]
-                                )
-                        # Normalize by number of active slots
-                        l_hm += loss_sum / (gt_ticks.shape[0] + gt_bars.shape[0] + 1)
+                            loss_sum += adaptive_wing_loss(
+                                torch.sigmoid(p_hm[i][k]),
+                                gt_hm[k]
+                            )
+                        # Normalize by number of slots
+                        l_hm += loss_sum / num_hm_slots
                     else:
                         l_hm.detach()
 
                 # Average over batch and apply weighting.
                 batch_len = max(1, len(sizes))
-                l_org /= (1.0 * batch_len)
+                l_org /= (5.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
-                l_reg /= (0.25 * batch_len)
-                l_hm /= (0.25 * batch_len)
+                l_reg /= (0.1 * batch_len)
+                l_hm /= (2.0 * batch_len)
 
                 loss: torch.Tensor =  l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
