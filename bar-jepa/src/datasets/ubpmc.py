@@ -43,7 +43,7 @@ def make_ubpmc(
         transform=transform)
 
     def create_sampler_loader(dataset):
-        sampler = torch.utils.data.distributed.DistributedSampler(
+        sampler = torch.utils.data.distributed.DistributedSampler( # type: ignore
             dataset,
             num_replicas=world_size,
             rank=rank,
@@ -222,8 +222,8 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
             normalized_bars.append((top_right / size).flip(-1))
 
         # Normalize plot bounding box origin
-        org_y = origin_y if origin_y is not None else plot_bb['y0']
-        org = (torch.tensor([plot_bb['x0'], org_y]) / size).flip(-1)
+        org_y = origin_y if origin_y is not None else plot_bb['y0']  # type: ignore
+        org = (torch.tensor([plot_bb['x0'], org_y]) / size).flip(-1) # type: ignore
 
         # Prepare ticks and bars
         ticks = normalized_y_axis

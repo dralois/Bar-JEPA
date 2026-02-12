@@ -57,9 +57,6 @@ def process_main(rank, mode, fname, world_size, devices):
 
     try:
         match mode:
-            case 'pretrain':
-                from src.train import main as pretrain_main
-                pretrain_main(args=params)
             case 'finetune':
                 from src.train_finetune import main as finetune_main
                 finetune_main(args=params)

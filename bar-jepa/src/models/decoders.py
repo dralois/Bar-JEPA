@@ -135,8 +135,8 @@ class KeypointDetector(nn.Module):
 
         if self.use_aux_heads:
             self.fc_cls = nn.Conv2d(self.num_hm_slots, self.num_classes, 1, 1, 0)   # Predicts class probabilities
-            self.fc_org = nn.Conv2d(self.num_hm_slots, 1, 1, 1, 0)                  # Predicts origin probability
             self.fc_reg = nn.Conv2d(self.num_hm_slots, 2, 1, 1, 0)                  # Predicts (dx, dy) offsets
+            self.fc_org = nn.Conv2d(self.num_hm_slots, 1, 1, 1, 0)                  # Predicts origin probability
 
         self.drop_layer = nn.Dropout(p=0.3)
 
@@ -195,7 +195,7 @@ class KeypointDetector(nn.Module):
             # Get feature map from the decoder [B_g, C_out, H*4, W*4]
             feat = self.decoder(valid_x)
 
-            # Scatter heatmaps back to the original batch order.
+            # Scatter heatmaps back to the original batch order
             for j, idx in enumerate(idxs):
                 hm_preds[idx] = feat[j]
 
@@ -208,7 +208,7 @@ class KeypointDetector(nn.Module):
                 org_logits = self.fc_org(feat_heads)
                 reg = self.fc_reg(feat_heads)
 
-                # Scatter dense outputs back to the original batch order.
+                # Scatter dense outputs back to the original batch order
                 cls_cat = torch.cat([cls_logits, org_logits], dim=1)
                 for j, idx in enumerate(idxs):
                     cls_preds[idx] = cls_cat[j] # type: ignore

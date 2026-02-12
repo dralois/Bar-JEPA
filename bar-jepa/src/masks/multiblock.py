@@ -91,7 +91,7 @@ class MaskCollator(object):
             """ Helper to restrict given mask to a set of acceptable regions """
             N = max(int(len(acceptable_regions)-tries), 0)
             for k in range(N):
-                mask *= acceptable_regions[k]
+                mask *= acceptable_regions[k] # type: ignore
         # --
         # -- Loop to sample masks until we find a valid one
         tries = 0

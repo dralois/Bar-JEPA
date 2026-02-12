@@ -51,7 +51,7 @@ def make_charts(
     logger.info('Chart dataset created')
 
     def create_sampler_loader(dataset):
-        sampler = torch.utils.data.distributed.DistributedSampler(
+        sampler = torch.utils.data.distributed.DistributedSampler( # type: ignore
             dataset,
             num_replicas=world_size,
             rank=rank,

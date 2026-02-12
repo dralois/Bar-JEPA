@@ -367,17 +367,18 @@ def main(args, resume_preempt=False):
                     return z
 
                 def loss_fn(z, h):
-                    loss = F.smooth_l1_loss(z, h)
-                    loss = AllReduce.apply(loss)
+                    loss: torch.Tensor = F.smooth_l1_loss(z, h)
+                    loss = AllReduce.apply(loss) # type: ignore
                     return loss
 
                 # Step 1. Forward
-                with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16):
+                with torch.amp.autocast(device.type, dtype=autocast_dtype, enabled=use_bfloat16): # type: ignore
                     h = forward_target()
                     z = forward_context()
                     loss = loss_fn(z, h)
 
                 #  Step 2. Backward & step
+                optimizer.zero_grad(set_to_none=True)
                 if use_bfloat16:
                     scaler.scale(loss).backward()
                     scaler.step(optimizer)
@@ -386,7 +387,6 @@ def main(args, resume_preempt=False):
                     loss.backward()
                     optimizer.step()
                 grad_stats = grad_logger(encoder.named_parameters())
-                optimizer.zero_grad()
 
                 # Step 3. momentum update of target encoder
                 with torch.no_grad():
@@ -427,8 +427,8 @@ def main(args, resume_preempt=False):
                     if grad_stats is not None:
                         logger.info('[%d, %5d] grad_stats: [%.2e %.2e] (%.2e, %.2e)'
                                     % (epoch + 1, itr,
-                                       grad_stats.first_layer,
-                                       grad_stats.last_layer,
+                                       grad_stats.first_layer, # type: ignore
+                                       grad_stats.last_layer,  # type: ignore
                                        grad_stats.min,
                                        grad_stats.max))
 
@@ -440,8 +440,8 @@ def main(args, resume_preempt=False):
                     "wd": _new_wd,
                     "mask/enc": maskA_meter.avg,
                     "mask/pred": maskB_meter.avg,
-                    "gradients/first-layer": None if grad_stats is None else grad_stats.first_layer,
-                    "gradients/last-layer": None if grad_stats is None else grad_stats.last_layer,
+                    "gradients/first-layer": None if grad_stats is None else grad_stats.first_layer, # type: ignore
+                    "gradients/last-layer": None if grad_stats is None else grad_stats.last_layer,   # type: ignore
                     "gradients/min": None if grad_stats is None else grad_stats.min,
                     "gradients/max": None if grad_stats is None else grad_stats.max
                 })
@@ -457,4 +457,4 @@ def main(args, resume_preempt=False):
     run.finish()
 
 if __name__ == "__main__":
-    main()
+    main({})
