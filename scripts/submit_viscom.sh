@@ -78,7 +78,13 @@ for ((i=0; i<GPU_COUNT; i++)); do
   DEVICES+="cuda:$i"
 done
 
-COMMAND="whereis python && python ./bar-jepa/main.py --mode $MODE --fname ./bar-jepa/configs/$CONFIG_DIR/$CONFIG --devices $DEVICES"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_VERSION="$(sed -nE 's/^version = \"([^\"]+)\"/\\1/p' "$REPO_ROOT/pyproject.toml" | head -n1)"
+if [[ -z "$PROJECT_VERSION" ]]; then
+  PROJECT_VERSION="unknown"
+fi
+
+COMMAND="whereis python && BAR_IJEPA_VERSION=$PROJECT_VERSION python ./bar-jepa/main.py --mode $MODE --fname ./bar-jepa/configs/$CONFIG_DIR/$CONFIG --devices $DEVICES"
 echo "Submitting mode '$MODE' preset '$PRESET' with config ./bar-jepa/configs/$CONFIG_DIR/$CONFIG and GPUs $GPUS"
 
 submit "$COMMAND" \
