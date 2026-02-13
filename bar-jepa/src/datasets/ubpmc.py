@@ -28,6 +28,7 @@ def make_ubpmc(
     root_path=None,
     split=None,
     training=True,
+    return_full_img=False,
     val_train_split=True,
     drop_last=True,
     shuffle=False
@@ -40,7 +41,8 @@ def make_ubpmc(
         root=root_path,
         training=training,
         split=split,
-        transform=transform)
+        transform=transform,
+        return_full_img=return_full_img)
 
     def create_sampler_loader(dataset):
         sampler = torch.utils.data.distributed.DistributedSampler( # type: ignore
@@ -79,6 +81,7 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
         training=True,
         split=None,
         transform=None,
+        return_full_img=False,
     ):
         """
         UB PMC dataset loader
@@ -104,6 +107,7 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
 
         self.patch_size = patch_size
         self.transform = transform if transform is not None else PILToTensor()
+        self.return_full_img = return_full_img
         self.data_paths = []
 
         for fname in os.listdir(img_path):
@@ -155,7 +159,7 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
         ann_path = self.data_paths[idx][1]
 
         img_pil = Image.open(img_path).convert('RGB')
-        full_img = PILToTensor()(img_pil)
+        full_img = PILToTensor()(img_pil) if self.return_full_img else None
         size = torch.tensor(img_pil.size)
         img = self.transform(img_pil)
 

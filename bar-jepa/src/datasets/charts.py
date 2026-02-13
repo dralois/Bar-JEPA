@@ -35,6 +35,7 @@ def make_charts(
     root_path=None,
     val_train_split=True,
     decoder_training=True,
+    return_full_img=False,
     training=True,
     drop_last=True,
     shuffle=False
@@ -47,7 +48,8 @@ def make_charts(
         root=root_path,
         transform=transform,
         training=training,
-        decoder_training=decoder_training)
+        decoder_training=decoder_training,
+        return_full_img=return_full_img)
     logger.info('Chart dataset created')
 
     def create_sampler_loader(dataset):
@@ -86,7 +88,8 @@ class Charts(torchvision.datasets.DatasetFolder):
         root='data',
         transform=None,
         training=True,
-        decoder_training=True
+        decoder_training=True,
+        return_full_img=False
     ):
         """
         Chart dataset loader
@@ -113,6 +116,7 @@ class Charts(torchvision.datasets.DatasetFolder):
             self.patch_size = patch_size
             self.transform = transform if transform is not None else PILToTensor()
             self.decoder_training = decoder_training
+            self.return_full_img = return_full_img
             self.data_paths = []
 
             for fname in os.listdir(img_path):
@@ -142,12 +146,13 @@ class Charts(torchvision.datasets.DatasetFolder):
 
         # -- Image
         img_pil = Image.open(img_path).convert('RGB')
-        full_img = PILToTensor()(img_pil)
         img = self.transform(img_pil)
 
         # If not decoder training, ignore annotations
         if not self.decoder_training:
-            return img, full_img, 0
+            return img, 0
+
+        full_img = PILToTensor()(img_pil) if self.return_full_img else None
 
         # -- Annotations
         ann = json.load(open(ann_path))

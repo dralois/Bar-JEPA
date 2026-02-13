@@ -134,6 +134,7 @@ def main(args):
             root_path=root_path,
             split=None,
             training=False,
+            return_full_img=True,
             val_train_split=False,
             drop_last=False,
             shuffle=False)
@@ -149,6 +150,7 @@ def main(args):
             root_path=root_path,
             val_train_split=False,
             decoder_training=True,
+            return_full_img=True,
             training=False,
             drop_last=False,
             shuffle=False)
