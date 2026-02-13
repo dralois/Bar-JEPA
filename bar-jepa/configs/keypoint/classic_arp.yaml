@@ -18,6 +18,7 @@ keypoint:
   hm_sigma: 1.0
   org_pos_weight: 40.0
   hm_pos_weight: 20.0
+  hm_all_slots: true
   class_weights:
   - 0.05
   - 1.0

@@ -99,6 +99,7 @@ def main(args, resume_preempt=False):
     cls_weights = args['keypoint']['class_weights']
     org_pos_weight = args['keypoint']['org_pos_weight']
     hm_pos_weight = args['keypoint']['hm_pos_weight']
+    hm_all_slots = args['keypoint']['hm_all_slots']
 
     # -- OPTIMIZATION
     ipe_scale = args['optimization']['ipe_scale']
@@ -422,14 +423,20 @@ def main(args, resume_preempt=False):
 
                         # Loss for slots
                         loss_sum = torch.tensor(0., device=device)
+                        active_slots = 0
                         for k in range(num_hm_slots):
-                            loss_sum += weighted_mse(
-                                torch.sigmoid(p_hm[i][k]),
-                                gt_hm[k],
-                                hm_pos_weight
-                            )
-                        # Normalize by number of slots
-                        l_hm += loss_sum / num_hm_slots
+                            slot_active = bool(gt_hm[k].max() > 0)
+                            if hm_all_slots or slot_active:
+                                loss_sum += weighted_mse(
+                                    torch.sigmoid(p_hm[i][k]),
+                                    gt_hm[k],
+                                    hm_pos_weight
+                                )
+                                active_slots += 1
+
+                        # Normalize by participating slots
+                        if active_slots > 0:
+                            l_hm += loss_sum / active_slots
                     else:
                         l_hm.detach()
 

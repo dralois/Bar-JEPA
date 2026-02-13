@@ -48,6 +48,7 @@ if [[ "$MODE" == "decoder" ]]; then
     arp) CONFIG="classic_arp.yaml" ;;
     arp-big-w) CONFIG="classic_arp_big_w.yaml" ;;
     arp-no-w) CONFIG="classic_arp_no_w.yaml" ;;
+    arp-active) CONFIG="classic_arp_active_slots.yaml" ;;
     noarp) CONFIG="classic_noarp.yaml" ;;
     simple) CONFIG="simple_arp.yaml" ;;
     vanilla) CONFIG="classic_vanilla.yaml" ;;

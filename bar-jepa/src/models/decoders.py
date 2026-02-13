@@ -188,7 +188,7 @@ class KeypointDetector(nn.Module):
 
             # [B_g, N, C_in] -> [B_g, C_in, H, W], considering only valid patches
             valid_x = x[idxs, :num_patches]
-            valid_x = valid_x.permute(0, 2, 1).reshape(-1, x.size(2), H, W)
+            valid_x = valid_x.permute(0, 2, 1).contiguous().view(-1, x.size(2), H, W)
 
             # First dropout before decoder
             valid_x = self.drop_layer(valid_x)
