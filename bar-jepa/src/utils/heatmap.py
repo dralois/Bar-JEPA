@@ -3,8 +3,6 @@ import torch.nn.functional as F
 
 from typing import List, Tuple
 
-from scipy.optimize import linear_sum_assignment
-
 
 def adaptive_wing_loss(
     pred: torch.Tensor,
@@ -448,6 +446,7 @@ def evaluate_gt_p_match(
         cost = distances.masked_fill(invalid, large_cost)
 
         # Perform Hungarian matching
+        from scipy.optimize import linear_sum_assignment
         row_idx, col_idx = linear_sum_assignment(cost.detach().cpu().numpy())
         if len(row_idx) == 0:
             return 0
