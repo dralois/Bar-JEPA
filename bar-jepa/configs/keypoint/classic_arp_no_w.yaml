@@ -1,23 +1,23 @@
 data:
-  batch_size: 196
+  batch_size: 1360
   crop_size: 224
   patch_size: 14
   num_workers: 12
   pin_mem: true
-  root_path: ./data
+  root_path: ./data_decoder
   is_ubpmc: false
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: keypoint
+  write_tag: kp-cl-arp-no-w
 keypoint:
   use_hm_loss: true
   use_aux_heads: true
   hm_slots: 32
   tick_slots: 15
   hm_sigma: 1.0
-  org_pos_weight: 40.0
-  hm_pos_weight: 20.0
+  org_pos_weight: 1.0
+  hm_pos_weight: 1.0
   class_weights:
   - 0.05
   - 1.0
@@ -25,8 +25,8 @@ keypoint:
 meta:
   load_checkpoint: true
   model_name: vit_huge
-  decoder_type: simple
-  read_checkpoint: model/jepa-ep360.pth.tar
+  decoder_type: classic
+  read_checkpoint: model/jepa-arp.pth.tar
   do_finetune: false
   finetune_epoch: 0
   use_bfloat16: true

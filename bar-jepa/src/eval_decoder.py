@@ -266,7 +266,7 @@ def main(args):
             sizes = torch.tensor([c.shape for c in gt_cls], device=device)
 
             h = encoder(imgs, grids)
-            p_cls, p_reg, _ = decoder(h, grids)
+            p_cls, p_reg, p_hm = decoder(h, grids)
 
             # Extract numeric OCR labels from full-resolution images.
             batch_numeric_text = []

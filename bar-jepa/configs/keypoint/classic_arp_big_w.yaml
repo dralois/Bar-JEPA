@@ -9,13 +9,15 @@ data:
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-cl-kp-only
+  write_tag: kp-cl-arp-big-w
 keypoint:
   use_hm_loss: true
-  use_aux_heads: false
+  use_aux_heads: true
   hm_slots: 32
   tick_slots: 15
   hm_sigma: 1.0
+  org_pos_weight: 40.0
+  hm_pos_weight: 20.0
   class_weights:
   - 0.05
   - 1.0

@@ -5,6 +5,8 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/submit_viscom.sh --mode decoder --preset arp [--gpus 4090:2]
+  scripts/submit_viscom.sh --mode decoder --preset arp-heavypos [--gpus 4090:2]
+  scripts/submit_viscom.sh --mode decoder --preset arp-pos1 [--gpus 4090:2]
   scripts/submit_viscom.sh --mode finetune --preset arp [--gpus 4090:2]
 EOF
 }
@@ -44,6 +46,8 @@ fi
 if [[ "$MODE" == "decoder" ]]; then
   case "$PRESET" in
     arp) CONFIG="classic_arp.yaml" ;;
+    arp-big-w) CONFIG="classic_arp_big_w.yaml" ;;
+    arp-no-w) CONFIG="classic_arp_no_w.yaml" ;;
     noarp) CONFIG="classic_noarp.yaml" ;;
     simple) CONFIG="simple_arp.yaml" ;;
     vanilla) CONFIG="classic_vanilla.yaml" ;;

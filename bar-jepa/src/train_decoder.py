@@ -35,8 +35,7 @@ from src.utils.distributed import (
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
-    build_slot_heatmaps,
-    adaptive_wing_loss
+    build_slot_heatmaps
 )
 
 from src.utils.logging import (
@@ -98,6 +97,8 @@ def main(args, resume_preempt=False):
     num_tick_slots = args['keypoint']['tick_slots']
     hm_sigma = args['keypoint']['hm_sigma']
     cls_weights = args['keypoint']['class_weights']
+    org_pos_weight = args['keypoint']['org_pos_weight']
+    hm_pos_weight = args['keypoint']['hm_pos_weight']
 
     # -- OPTIMIZATION
     ipe_scale = args['optimization']['ipe_scale']
@@ -365,6 +366,11 @@ def main(args, resume_preempt=False):
                 return p_cls, p_reg, p_hm
 
             def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_hm):
+
+                def weighted_mse(pred_map, gt_map, peak_weight):
+                    weights = 1.0 + (peak_weight * gt_map)
+                    return ((pred_map - gt_map) ** 2 * weights).mean()
+
                 l_org = torch.tensor(0., device=device)
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
@@ -379,10 +385,10 @@ def main(args, resume_preempt=False):
                             p_cls[i][:3].unsqueeze(0),
                             gt_cls[i].unsqueeze(0),
                             weight=cls_weights)
-                        l_org += adaptive_wing_loss(
+                        l_org += weighted_mse(
                             torch.sigmoid(p_cls[i][3]),
                             gt_orgs[i],
-                            use_weight_map=False
+                            org_pos_weight
                         )
 
                         # Regression loss only on non-background samples
@@ -394,7 +400,7 @@ def main(args, resume_preempt=False):
                         l_reg.detach()
                         l_org.detach()
 
-                    # Heatmap loss (adaptive wing on gaussian targets)
+                    # Heatmap loss (MSE on gaussian targets)
                     if use_hm_loss:
                         # Extract ground truth labels
                         gt_org, gt_bars, gt_ticks = gt_maps_to_cls_lists(
@@ -415,10 +421,10 @@ def main(args, resume_preempt=False):
                         # Loss for slots
                         loss_sum = torch.tensor(0., device=device)
                         for k in range(num_hm_slots):
-                            loss_sum += adaptive_wing_loss(
+                            loss_sum += weighted_mse(
                                 torch.sigmoid(p_hm[i][k]),
                                 gt_hm[k],
-                                use_weight_map=False
+                                hm_pos_weight
                             )
                         # Normalize by number of slots
                         l_hm += loss_sum / num_hm_slots
@@ -427,10 +433,10 @@ def main(args, resume_preempt=False):
 
                 # Average over batch and apply weighting
                 batch_len = max(1, len(sizes))
-                l_org /= (10.0 * batch_len)
+                l_org /= (1.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
                 l_reg /= (0.1 * batch_len)
-                l_hm /= (2.0 * batch_len)
+                l_hm /= (0.2 * batch_len)
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
