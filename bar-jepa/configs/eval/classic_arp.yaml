@@ -9,7 +9,7 @@ data:
   preserve_aspect_ratio: true
 keypoint:
   use_aux_heads: true
-  hm_slots: 32
+  hm_slots: 64
   tick_slots: 15
   hm_sigma: 1.0
   pnt_detect_thresh: 0.9
@@ -25,4 +25,4 @@ ocr:
 meta:
   model_name: vit_huge
   decoder_type: classic
-  read_checkpoint: ./output/kp-cl-arp-latest.pth.tar
+  read_checkpoint: ./output/kp-cl-arp-64-latest.pth.tar

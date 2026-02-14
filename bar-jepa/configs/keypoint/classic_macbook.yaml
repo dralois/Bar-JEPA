@@ -1,5 +1,5 @@
 data:
-  batch_size: 4
+  batch_size: 1
   crop_size: 224
   patch_size: 14
   num_workers: 1
@@ -16,9 +16,7 @@ keypoint:
   hm_slots: 32
   tick_slots: 15
   hm_sigma: 1.0
-  org_pos_weight: 40.0
-  hm_pos_weight: 20.0
-  hm_all_slots: true
+  hm_all_slots: false
   class_weights:
   - 0.05
   - 1.0
@@ -32,8 +30,8 @@ meta:
   finetune_epoch: 0
   use_bfloat16: true
 optimization:
-  epochs: 100
-  final_lr: 1.0e-06
+  epochs: 50
+  final_lr: 1.0e-05
   final_weight_decay: 0.1
   ipe_scale: 1.0
   lr: 1.0e-03

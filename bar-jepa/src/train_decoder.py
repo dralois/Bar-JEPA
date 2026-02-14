@@ -37,7 +37,8 @@ from src.utils.distributed import (
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
-    build_slot_heatmaps
+    build_slot_heatmaps,
+    adaptive_wing_loss
 )
 
 from src.utils.logging import (
@@ -133,8 +134,6 @@ def main(args, resume_preempt=False):
     num_tick_slots = args['keypoint']['tick_slots']
     hm_sigma = args['keypoint']['hm_sigma']
     cls_weights = args['keypoint']['class_weights']
-    org_pos_weight = args['keypoint']['org_pos_weight']
-    hm_pos_weight = args['keypoint']['hm_pos_weight']
     hm_all_slots = args['keypoint']['hm_all_slots']
 
     # -- OPTIMIZATION
@@ -422,15 +421,16 @@ def main(args, resume_preempt=False):
                 # For each chart in batch individually
                 for i in range(len(sizes)):
                     if use_aux_heads:
-                        # Weighted classification loss (origin is separate)
+                        # Weighted classification loss
                         l_cls += F.cross_entropy(
                             p_cls[i][:3].unsqueeze(0),
                             gt_cls[i].unsqueeze(0),
                             weight=cls_weights)
-                        l_org += weighted_mse(
+
+                        # Origin loss, akin to heatmap
+                        l_org += adaptive_wing_loss(
                             torch.sigmoid(p_cls[i][3]),
-                            gt_orgs[i],
-                            org_pos_weight
+                            gt_orgs[i]
                         )
 
                         # Regression loss only on non-background samples
@@ -442,7 +442,7 @@ def main(args, resume_preempt=False):
                         l_reg.detach()
                         l_org.detach()
 
-                    # Heatmap loss (MSE on gaussian targets)
+                    # Heatmap loss on gaussian targets
                     if use_hm_loss:
                         # Extract ground truth labels
                         gt_org, gt_bars, gt_ticks = gt_maps_to_cls_lists(
@@ -466,16 +466,14 @@ def main(args, resume_preempt=False):
                         for k in range(num_hm_slots):
                             slot_active = bool(gt_hm[k].max() > 0)
                             if hm_all_slots or slot_active:
-                                loss_sum += weighted_mse(
+                                loss_sum += adaptive_wing_loss(
                                     torch.sigmoid(p_hm[i][k]),
-                                    gt_hm[k],
-                                    hm_pos_weight
+                                    gt_hm[k]
                                 )
                                 active_slots += 1
 
-                        # Normalize by participating slots
-                        if active_slots > 0:
-                            l_hm += loss_sum / active_slots
+                        # Normalize by number of active slots
+                        l_hm += loss_sum / active_slots
                     else:
                         l_hm.detach()
 
@@ -483,8 +481,8 @@ def main(args, resume_preempt=False):
                 batch_len = max(1, len(sizes))
                 l_org /= (1.0 * batch_len)
                 l_cls /= (1.0 * batch_len)
-                l_reg /= (0.1 * batch_len)
-                l_hm /= (0.2 * batch_len)
+                l_reg /= (0.25 * batch_len)
+                l_hm /= (0.25 * batch_len)
 
                 loss: torch.Tensor = l_org + l_cls + l_reg + l_hm
                 loss = AllReduce.apply(loss) # type: ignore
