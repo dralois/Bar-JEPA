@@ -1,7 +1,5 @@
 import os
 import time
-import re
-from pathlib import Path
 
 # -- FOR DISTRIBUTED TRAINING ENSURE ONLY 1 DEVICE VISIBLE PER PROCESS
 try:
@@ -28,7 +26,12 @@ from torch.nn.parallel import DistributedDataParallel
 from src.datasets.charts import make_charts
 from src.datasets.ubpmc import make_ubpmc
 from src.transforms import make_transforms
-from src.masks.charts import ChartsCollator, UBPMCCollator
+from src.utils.version import resolve_project_version
+
+from src.masks.charts import (
+    ChartsCollator,
+    UBPMCCollator
+)
 
 from src.utils.distributed import (
     init_distributed,
@@ -67,40 +70,6 @@ torch.backends.cudnn.benchmark = True
 # Initialize logging and distributed training
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
-
-_VERSION_LINE = re.compile(r'^\s*version\s*=\s*"([^"]+)"\s*$')
-
-
-def _resolve_project_version() -> str:
-    for key in ('BAR_IJEPA_VERSION', 'PROJECT_VERSION'):
-        value = os.environ.get(key)
-        if value:
-            return value.strip()
-
-    for base in (Path(__file__).resolve().parents[2], Path.cwd()):
-        pyproject = base / 'pyproject.toml'
-        if not pyproject.exists():
-            continue
-
-        try:
-            in_project = False
-            for line in pyproject.read_text(encoding='utf-8').splitlines():
-                stripped = line.strip()
-                if stripped == '[project]':
-                    in_project = True
-                    continue
-                if in_project and stripped.startswith('['):
-                    in_project = False
-                if not in_project:
-                    continue
-
-                match = _VERSION_LINE.match(line)
-                if match is not None:
-                    return match.group(1)
-        except Exception:
-            continue
-
-    return 'unknown'
 
 def main(args, resume_preempt=False):
     # ----------------------------------------------------------------------- #
@@ -311,7 +280,7 @@ def main(args, resume_preempt=False):
     cls_weights = torch.tensor(cls_weights).to(device)
 
     # Initialize wandb
-    project_version = _resolve_project_version()
+    project_version = resolve_project_version()
     logger.info(f'WandB project version: {project_version}')
     run = wandb.init(
         entity='bar-ijepa',
