@@ -376,11 +376,6 @@ def main(args, resume_preempt=False):
                 return p_cls, p_reg, p_hm
 
             def loss_fn(gt_orgs, p_cls, gt_cls, p_reg, gt_reg, p_hm):
-
-                def weighted_mse(pred_map, gt_map, peak_weight):
-                    weights = 1.0 + (peak_weight * gt_map)
-                    return ((pred_map - gt_map) ** 2 * weights).mean()
-
                 l_org = torch.tensor(0., device=device)
                 l_cls = torch.tensor(0., device=device)
                 l_reg = torch.tensor(0., device=device)
@@ -397,7 +392,7 @@ def main(args, resume_preempt=False):
                             weight=cls_weights)
 
                         # Origin loss, akin to heatmap
-                        l_org += adaptive_wing_loss(
+                        l_org += F.mse_loss(
                             torch.sigmoid(p_cls[i][3]),
                             gt_orgs[i]
                         )
@@ -435,7 +430,7 @@ def main(args, resume_preempt=False):
                         for k in range(num_hm_slots):
                             slot_active = bool(gt_hm[k].max() > 0)
                             if hm_all_slots or slot_active:
-                                loss_sum += adaptive_wing_loss(
+                                loss_sum += F.mse_loss(
                                     torch.sigmoid(p_hm[i][k]),
                                     gt_hm[k]
                                 )
