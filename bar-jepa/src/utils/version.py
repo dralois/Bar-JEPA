@@ -1,9 +1,9 @@
 import re
 from pathlib import Path
-import tomllib
 
 
-_VERSION_LINE = re.compile(r'^\s*version\s*=\s*"([^"]+)"\s*$')
+_SECTION_LINE = re.compile(r'^\s*\[([^\]]+)\]\s*$')
+_VERSION_LINE = re.compile(r'^\s*version\s*=\s*["\']([^"\']+)["\']\s*(?:#.*)?$')
 
 
 def resolve_project_version() -> str:
@@ -28,30 +28,19 @@ def resolve_project_version() -> str:
         if not pyproject.exists():
             continue
 
-        # Primary path: parse TOML and read [project].version.
-        try:
-            with pyproject.open('rb') as f:
-                data = tomllib.load(f)
-            value = str(data.get('project', {}).get('version', '')).strip()
-            if value:
-                return value
-        except Exception:
-            pass
-
-        # Fallback path: line-based parser for partially-invalid TOML files.
+        # Line-based parser that avoids importing a TOML dependency.
         try:
             in_project = False
             for line in pyproject.read_text(encoding='utf-8').splitlines():
                 stripped = line.strip()
-                if stripped == '[project]':
-                    in_project = True
+                section = _SECTION_LINE.match(stripped)
+                if section is not None:
+                    in_project = section.group(1).strip() == 'project'
                     continue
-                if in_project and stripped.startswith('['):
-                    in_project = False
                 if not in_project:
                     continue
 
-                match = _VERSION_LINE.match(line)
+                match = _VERSION_LINE.match(stripped)
                 if match is not None:
                     return match.group(1)
         except Exception:

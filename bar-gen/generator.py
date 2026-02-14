@@ -345,9 +345,9 @@ def get_random_plot(filename):
     # set the ticks and tick labels
     set_hticks(x + (bar_width / 2) * bar_per_loc)
     hticklabels = set_hticklabels(ticks_label, fontproperties=ticks_label_font)
-    hticklines = [line for line in get_hticklines() if not line.get_ydata()[0]]
+    hticklines = [line for line in get_hticklines() if not line.get_ydata()[0]] # type: ignore
     vticklabels = get_vticklabels()
-    vticklines = [line for line in get_vticklines() if not line.get_xdata()[0]]
+    vticklines = [line for line in get_vticklines() if not line.get_xdata()[0]] # type: ignore
     for label in vticklabels:
         label.set_fontproperties(ticks_label_font)
     if bar_direction == "horizontal":
