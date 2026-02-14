@@ -17,6 +17,8 @@ import numpy as np
 
 import torch
 
+from tqdm.auto import tqdm
+
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
     p_maps_to_cls_lists,
@@ -59,14 +61,13 @@ def main(args):
     r_file = args['meta']['read_checkpoint']
 
     # -- DATA
-    preserve_aspect_ratio = args['data']['preserve_aspect_ratio']
-    batch_size = args['data']['batch_size']
-    pin_mem = args['data']['pin_mem']
-    num_workers = args['data']['num_workers']
-    root_path = args['data']['root_path']
-    is_ubpmc = args['data']['is_ubpmc']
     crop_size = args['data']['crop_size']
     patch_size = args['data']['patch_size']
+    num_workers = args['data']['num_workers']
+    pin_mem = args['data']['pin_mem']
+    root_path = args['data']['root_path']
+    is_ubpmc = args['data']['is_ubpmc']
+    preserve_aspect_ratio = args['data']['preserve_aspect_ratio']
     patch_count = int((crop_size // patch_size) ** 2.)
 
     # -- KEYPOINT DETECTION
@@ -75,6 +76,7 @@ def main(args):
     pnt_thresh = args['keypoint']['pnt_detect_thresh']
     cls_thresh = args['keypoint']['cls_conf_thresh']
     eval_thresh = args['keypoint']['eval_thresh']
+    score_norm = args['keypoint']['score_norm']
 
     # -- LOGGING
     folder =  args['logging']['folder']
@@ -126,7 +128,7 @@ def main(args):
         collator = UBPMCCollator()
         test_loader, test_sampler = make_ubpmc( # type: ignore
             transform=transform,
-            batch_size=batch_size,
+            batch_size=1,
             patch_size=patch_size,
             collator=collator,
             pin_mem=pin_mem,
@@ -142,7 +144,7 @@ def main(args):
         collator = ChartsCollator()
         test_loader, test_sampler = make_charts( # type: ignore
             transform=transform,
-            batch_size=batch_size,
+            batch_size=1,
             patch_size=patch_size,
             collator=collator,
             pin_mem=pin_mem,
@@ -198,15 +200,14 @@ def main(args):
         ('%.5f', 'tick_f1')
     )
 
-    def load_charts(data, full_data, targets):
-        gt_orgs, gt_cls, gt_reg = targets
-        imgs = [img.to(device, non_blocking=True) for img in data]
-        full_imgs = [img.cpu() for img in full_data]
-        grids = [(img.shape[1] // patch_size, img.shape[2] // patch_size) for img in imgs]
-        gt_orgs = [gt.to(device, non_blocking=True) for gt in gt_orgs]
-        gt_cls = [gt.to(device, non_blocking=True) for gt in gt_cls]
-        gt_reg = [gt.to(device, non_blocking=True) for gt in gt_reg]
-        return imgs, full_imgs, grids, gt_orgs, gt_cls, gt_reg
+    def load_chart(data, full_data, targets):
+        img = data[0].to(device, non_blocking=True)
+        full_img = full_data[0].cpu()
+        grid = (img.shape[1] // patch_size, img.shape[2] // patch_size)
+        gt_org = targets[0][0].to(device, non_blocking=True)
+        gt_cls = targets[1][0].to(device, non_blocking=True)
+        gt_reg = targets[2][0].to(device, non_blocking=True)
+        return [img], full_img, [grid], gt_org, gt_cls, gt_reg
 
     def log_stats(split_name, stats):
         samples = stats['samples']
@@ -263,69 +264,73 @@ def main(args):
     with torch.no_grad():
         test_sampler.set_epoch(0)
 
-        for data, full_data, targets in test_loader:
-            imgs, full_imgs, grids, gt_orgs, gt_cls, gt_reg = load_charts(data, full_data, targets)
-            sizes = torch.tensor([c.shape for c in gt_cls], device=device)
+        eval_iter = tqdm(
+            test_loader,
+            total=len(test_loader),
+            desc='Evaluating',
+            dynamic_ncols=True
+        )
 
-            h = encoder(imgs, grids)
-            p_cls, p_reg, p_hm = decoder(h, grids)
+        for data, full_data, targets in eval_iter:
+            img, full_img, grid, gt_org, gt_cls, gt_reg = load_chart(data, full_data, targets)
+            size = torch.tensor(gt_cls.shape, device=device)
+
+            # Inference
+            h = encoder(img, grid)
+            p_cls, p_reg, p_hm = [x[0] for x in decoder(h, grid)]
 
             # Extract numeric OCR labels from full-resolution images.
-            batch_numeric_text = []
-            for full_img in full_imgs:
-                if ocr_engine is not None:
-                    batch_numeric_text.append(ocr_engine.extract_numeric_text(full_img))
-                else:
-                    batch_numeric_text.append([])
+            if ocr_engine is not None:
+                numeric_text = ocr_engine.extract_numeric_text(full_img)
 
-            # For each chart in batch individually
-            for i in range(len(p_cls)):
-                # Extract ground truth labels
-                _, gt_bars, gt_ticks = gt_maps_to_cls_lists(
-                    gt_orgs[i], gt_cls[i], gt_reg[i], sizes[i]
+            # Extract ground truth labels
+            _, gt_bars, gt_ticks = gt_maps_to_cls_lists(
+                gt_org, gt_cls, gt_reg, size
+            )
+
+            # Radius for nms is based on max(H, W)
+            radius_thresh = eval_thresh / size.max()
+
+            # Convert maps to bars & ticks + origin
+            p_bars, p_ticks, _ = p_maps_to_cls_lists(
+                p_cls, p_reg, size, pnt_thresh, cls_thresh, score_norm
+            )
+
+            # Filter predictions using nms
+            p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
+
+            # Match each predicted tick to closest numeric OCR text
+            tick_text_matches = []
+            bar_value_pairs = []
+            y_dist_per_value = None
+            if ocr_engine is not None:
+                tick_text_matches = ocr_engine.match_ticks_to_numeric_text(
+                    p_ticks, numeric_text
+                )
+                bar_value_pairs, y_dist_per_value = ocr_engine.infer_bar_values(
+                    p_bars, tick_text_matches
                 )
 
-                # Radius for nms is based on max(H, W)
-                radius_thresh = eval_thresh / sizes[i].max()
+            # Evaluate predictions
+            b_p, b_r, b_f1, t_p, t_r, t_f1 = evaluate_gt_p_match(
+                gt_bars, gt_ticks, p_bars, p_ticks, radius_thresh
+            )
 
-                # Convert maps to bars & ticks + origin
-                p_bars, p_ticks, _ = p_maps_to_cls_lists(
-                    p_cls[i], p_reg[i], sizes[i], pnt_thresh, cls_thresh
-                )
+            split_stats['samples'] += 1
+            split_stats['ocr_numeric'] += len(numeric_text)
+            split_stats['tick_text_matches'] += len(tick_text_matches)
+            split_stats['bars_with_value'] += len(bar_value_pairs)
+            if y_dist_per_value is not None:
+                split_stats['y_dist_per_value_sum'] += y_dist_per_value
+                split_stats['value_mapping_count'] += 1
+            split_stats['bar_p'] += b_p
+            split_stats['bar_r'] += b_r
+            split_stats['bar_f1'] += b_f1
+            split_stats['tick_p'] += t_p
+            split_stats['tick_r'] += t_r
+            split_stats['tick_f1'] += t_f1
 
-                # Filter predictions using nms
-                p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
-
-                # Match each predicted tick to closest numeric OCR text
-                tick_text_matches = []
-                bar_value_pairs = []
-                y_dist_per_value = None
-                if ocr_engine is not None:
-                    tick_text_matches = ocr_engine.match_ticks_to_numeric_text(
-                        p_ticks, batch_numeric_text[i]
-                    )
-                    bar_value_pairs, y_dist_per_value = ocr_engine.infer_bar_values(
-                        p_bars, tick_text_matches
-                    )
-
-                # Evaluate predictions
-                b_p, b_r, b_f1, t_p, t_r, t_f1 = evaluate_gt_p_match(
-                    gt_bars, gt_ticks, p_bars, p_ticks, radius_thresh
-                )
-
-                split_stats['samples'] += 1
-                split_stats['ocr_numeric'] += len(batch_numeric_text[i])
-                split_stats['tick_text_matches'] += len(tick_text_matches)
-                split_stats['bars_with_value'] += len(bar_value_pairs)
-                if y_dist_per_value is not None:
-                    split_stats['y_dist_per_value_sum'] += y_dist_per_value
-                    split_stats['value_mapping_count'] += 1
-                split_stats['bar_p'] += b_p
-                split_stats['bar_r'] += b_r
-                split_stats['bar_f1'] += b_f1
-                split_stats['tick_p'] += t_p
-                split_stats['tick_r'] += t_r
-                split_stats['tick_f1'] += t_f1
+        eval_iter.close()
 
     dataset_name = 'UB PMC' if is_ubpmc else 'Charts'
 

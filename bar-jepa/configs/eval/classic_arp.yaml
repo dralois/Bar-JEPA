@@ -1,20 +1,19 @@
 data:
-  batch_size: 1
   crop_size: 224
   patch_size: 14
   num_workers: 1
   pin_mem: false
   root_path: ./data
   is_ubpmc: false
-  preserve_aspect_ratio: true
+  preserve_aspect_ratio: false
 keypoint:
   use_aux_heads: true
-  hm_slots: 64
+  hm_slots: 32
   tick_slots: 15
-  hm_sigma: 1.0
   pnt_detect_thresh: 0.9
   cls_conf_thresh: 0.75
   eval_thresh: 1.5
+  score_norm: false
 logging:
   folder: ./output
   write_tag: eval_classic_arp
@@ -25,4 +24,4 @@ ocr:
 meta:
   model_name: vit_huge
   decoder_type: classic
-  read_checkpoint: ./output/kp-cl-arp-64-latest.pth.tar
+  read_checkpoint: ./output/kp-cl-noarp-latest.pth.tar
