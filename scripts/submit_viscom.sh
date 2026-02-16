@@ -4,16 +4,21 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/submit_viscom.sh --mode decoder --preset arp [--gpus 4090:2]
-  scripts/submit_viscom.sh --mode decoder --preset arp-heavypos [--gpus 4090:2]
-  scripts/submit_viscom.sh --mode decoder --preset arp-pos1 [--gpus 4090:2]
-  scripts/submit_viscom.sh --mode finetune --preset arp [--gpus 4090:2]
+  scripts/submit_viscom.sh --mode decoder --preset arp [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder --preset noarp [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder --preset vanilla [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder --preset simple [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder-finetune --preset arp [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder-finetune --preset noarp [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder-finetune --preset vanilla [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder-finetune --preset simple [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode finetune --preset arp [--gpus 6000:1]
 EOF
 }
 
 MODE="decoder"
 PRESET="arp"
-GPUS="4090:2"
+GPUS="6000:1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,8 +36,8 @@ if [[ -z "$MODE" ]]; then
   exit 1
 fi
 
-if [[ "$MODE" != "decoder" && "$MODE" != "finetune" ]]; then
-  echo "Error: --mode must be 'decoder' or 'finetune'." >&2
+if [[ "$MODE" != "decoder" && "$MODE" != "decoder-finetune" && "$MODE" != "finetune" ]]; then
+  echo "Error: --mode must be 'decoder', 'decoder-finetune', or 'finetune'." >&2
   usage
   exit 1
 fi
@@ -42,6 +47,8 @@ if [[ -z "$PRESET" ]]; then
   usage
   exit 1
 fi
+
+RUN_MODE="$MODE"
 
 if [[ "$MODE" == "decoder" ]]; then
   case "$PRESET" in
@@ -54,6 +61,16 @@ if [[ "$MODE" == "decoder" ]]; then
     *) echo "Error: unknown preset '$PRESET' for decoder." >&2; usage; exit 1 ;;
   esac
   CONFIG_DIR="keypoint"
+elif [[ "$MODE" == "decoder-finetune" ]]; then
+  case "$PRESET" in
+    arp) CONFIG="classic_arp.yaml" ;;
+    noarp) CONFIG="classic_noarp.yaml" ;;
+    simple) CONFIG="simple_arp.yaml" ;;
+    vanilla) CONFIG="classic_vanilla.yaml" ;;
+    *) echo "Error: unknown preset '$PRESET' for decoder-finetune." >&2; usage; exit 1 ;;
+  esac
+  CONFIG_DIR="keypoint/finetune"
+  RUN_MODE="decoder"
 else
   case "$PRESET" in
     arp) CONFIG="vith14_arp.yaml" ;;
@@ -77,7 +94,7 @@ for ((i=0; i<GPU_COUNT; i++)); do
   DEVICES+="cuda:$i"
 done
 
-COMMAND="whereis python && python ./bar-jepa/main.py --mode $MODE --fname ./bar-jepa/configs/$CONFIG_DIR/$CONFIG --devices $DEVICES"
+COMMAND="whereis python && python ./bar-jepa/main.py --mode $RUN_MODE --fname ./bar-jepa/configs/$CONFIG_DIR/$CONFIG --devices $DEVICES"
 echo "Submitting mode '$MODE' preset '$PRESET' with config ./bar-jepa/configs/$CONFIG_DIR/$CONFIG and GPUs $GPUS"
 
 submit "$COMMAND" \

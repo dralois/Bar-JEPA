@@ -1,0 +1,40 @@
+data:
+  batch_size: 1360
+  crop_size: 224
+  patch_size: 14
+  num_workers: 12
+  pin_mem: true
+  root_path: ./UBPMC
+  is_ubpmc: true
+  preserve_aspect_ratio: false
+logging:
+  folder: ./output
+  write_tag: kp-cl-vanilla
+keypoint:
+  use_hm_loss: true
+  use_aux_heads: true
+  hm_slots: 32
+  tick_slots: 15
+  hm_sigma: 1.0
+  hm_all_slots: false
+  class_weights:
+  - 0.05
+  - 1.0
+  - 1.0
+meta:
+  load_checkpoint: true
+  model_name: vit_huge
+  decoder_type: classic
+  read_checkpoint: kp-cl-vanilla-latest.pth.tar
+  do_finetune: true
+  finetune_epoch: 50
+  use_bfloat16: true
+optimization:
+  epochs: 30
+  final_lr: 1.0e-06
+  final_weight_decay: 0.04
+  ipe_scale: 1.0
+  lr: 5.0e-05
+  start_lr: 5.0e-06
+  warmup: 3
+  weight_decay: 0.02
