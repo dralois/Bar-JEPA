@@ -9,14 +9,14 @@ data:
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-cl-arp-active-slots
+  write_tag: kp-cl-arp
 keypoint:
-  use_hm_loss: true
+  use_hm_loss: false
   use_aux_heads: true
   hm_slots: 32
   tick_slots: 15
   hm_sigma: 1.0
-  hm_all_slots: true
+  hm_all_slots: false
   class_weights:
   - 0.05
   - 1.0
