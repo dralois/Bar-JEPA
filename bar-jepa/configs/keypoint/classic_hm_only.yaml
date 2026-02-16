@@ -9,7 +9,7 @@ data:
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-cl-arp
+  write_tag: kp-cl-hm
 keypoint:
   use_hm_loss: true
   use_aux_heads: false
