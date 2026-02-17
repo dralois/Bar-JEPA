@@ -9,7 +9,7 @@ data:
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-spl-arp-ft-highlr
+  write_tag: kp-cl-arp-ft-highlr
 keypoint:
   use_hm_loss: true
   use_aux_heads: true
@@ -24,8 +24,8 @@ keypoint:
 meta:
   load_checkpoint: true
   model_name: vit_huge
-  decoder_type: simple
-  read_checkpoint: kp-spl-arp-latest.pth.tar
+  decoder_type: classic
+  read_checkpoint: kp-cl-arp-latest.pth.tar
   do_finetune: true
   finetune_epoch: 50
   use_bfloat16: true

@@ -12,7 +12,7 @@ Usage:
   scripts/submit_viscom.sh --mode decoder-finetune --preset noarp [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder-finetune --preset vanilla [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder-finetune --preset simple [--gpus 6000:1]
-  scripts/submit_viscom.sh --mode decoder-finetune --preset simple-highlr [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder-finetune --preset arp-highlr [--gpus 6000:1]
   scripts/submit_viscom.sh --mode finetune --preset arp [--gpus 6000:1]
 EOF
 }
@@ -65,9 +65,9 @@ if [[ "$MODE" == "decoder" ]]; then
 elif [[ "$MODE" == "decoder-finetune" ]]; then
   case "$PRESET" in
     arp) CONFIG="classic_arp.yaml" ;;
+    arp-highlr) CONFIG="classic_arp_highlr.yaml" ;;
     noarp) CONFIG="classic_noarp.yaml" ;;
     simple) CONFIG="simple_arp.yaml" ;;
-    simple-highlr) CONFIG="simple_arp_highlr.yaml" ;;
     vanilla) CONFIG="classic_vanilla.yaml" ;;
     *) echo "Error: unknown preset '$PRESET' for decoder-finetune." >&2; usage; exit 1 ;;
   esac
