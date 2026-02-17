@@ -6,6 +6,28 @@ from pathlib import Path
 
 PROJECT_SECTION = '[project]'
 VERSION_RE = re.compile(r'^(\s*version\s*=\s*")(\d+)\.(\d+)\.(\d+)(".*)$')
+ROLL_BASE = 10
+
+
+def bump_with_carry(major: int, minor: int, patch: int) -> tuple[int, int, int]:
+    """
+    Bumps a semantic triplet with decimal carry between patch/minor/major.
+
+    :param major: major version part
+    :param minor: minor version part
+    :param patch: patch version part
+    :return: bumped `(major, minor, patch)` tuple
+    """
+    patch += 1
+    if patch >= ROLL_BASE:
+        patch = 0
+        minor += 1
+
+    if minor >= ROLL_BASE:
+        minor = 0
+        major += 1
+
+    return major, minor, patch
 
 
 def read_current_version(pyproject: Path) -> str:
@@ -46,7 +68,8 @@ def bump_patch_version(pyproject: Path) -> str:
 
         major = int(match.group(2))
         minor = int(match.group(3))
-        patch = int(match.group(4)) + 1
+        patch = int(match.group(4))
+        major, minor, patch = bump_with_carry(major, minor, patch)
         new_version = f'{major}.{minor}.{patch}'
         lines[idx] = f'{match.group(1)}{new_version}{match.group(5)}'
         pyproject.write_text('\n'.join(lines) + '\n', encoding='utf-8')
