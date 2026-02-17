@@ -9,7 +9,7 @@ data:
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: keypoint
+  write_tag: keypoint-ft
 keypoint:
   use_hm_loss: true
   use_aux_heads: true

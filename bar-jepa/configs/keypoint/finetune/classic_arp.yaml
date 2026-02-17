@@ -1,5 +1,5 @@
 data:
-  batch_size: 1360
+  batch_size: 263
   crop_size: 224
   patch_size: 14
   num_workers: 12
@@ -9,7 +9,7 @@ data:
   preserve_aspect_ratio: true
 logging:
   folder: ./output
-  write_tag: kp-cl-arp
+  write_tag: kp-cl-arp-ft
 keypoint:
   use_hm_loss: true
   use_aux_heads: true

@@ -212,7 +212,7 @@ def main(args, resume_preempt=False):
                 root_path=root_path,
                 training=True,
                 val_train_split=True,
-                drop_last=False,
+                drop_last=True,
                 shuffle=True)
     else:
         collator = ChartsCollator()
