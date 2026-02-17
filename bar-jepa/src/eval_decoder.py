@@ -19,19 +19,11 @@ import torch
 
 from tqdm.auto import tqdm
 
-from src.utils.heatmap import (
-    gt_maps_to_cls_lists,
-    p_maps_to_cls_lists,
-    evaluate_gt_p_match,
-    nms
-)
 from src.utils.ocr import NumericOCR
-
 from src.datasets.charts import make_charts
 from src.datasets.ubpmc import make_ubpmc
-
-from src.masks.charts import ChartsCollator, UBPMCCollator
-
+from src.transforms import make_transforms
+from src.masks.charts import EvalCollator
 from src.utils.logging import CSVLogger
 
 from src.helper import (
@@ -39,7 +31,16 @@ from src.helper import (
     init_decoder_model
 )
 
-from src.transforms import make_transforms
+from src.utils.heatmap import (
+    p_maps_to_cls_lists
+)
+
+from src.utils.postprocessing import (
+    evaluate_gt_p_match,
+    evaluate_value_accuracy,
+    nms
+)
+
 
 _GLOBAL_SEED = 0
 np.random.seed(_GLOBAL_SEED)
@@ -125,7 +126,7 @@ def main(args):
 
     # -- init test data-loaders/samplers
     if is_ubpmc:
-        collator = UBPMCCollator()
+        collator = EvalCollator()
         test_loader, test_sampler = make_ubpmc( # type: ignore
             transform=transform,
             batch_size=1,
@@ -136,12 +137,12 @@ def main(args):
             root_path=root_path,
             split=None,
             training=False,
-            return_full_img=True,
+            eval_mode=True,
             val_train_split=False,
             drop_last=False,
             shuffle=False)
     else:
-        collator = ChartsCollator()
+        collator = EvalCollator()
         test_loader, test_sampler = make_charts( # type: ignore
             transform=transform,
             batch_size=1,
@@ -152,7 +153,7 @@ def main(args):
             root_path=root_path,
             val_train_split=False,
             decoder_training=True,
-            return_full_img=True,
+            eval_mode=True,
             training=False,
             drop_last=False,
             shuffle=False)
@@ -184,14 +185,10 @@ def main(args):
         log_file,
         ('%s', 'dataset'),
         ('%s', 'checkpoint'),
-        ('%.5f', 'pnt_detect_thresh'),
-        ('%.5f', 'cls_conf_thresh'),
-        ('%.5f', 'eval_thresh'),
         ('%d', 'samples'),
-        ('%d', 'ocr_numeric'),
-        ('%d', 'tick_text_matches'),
-        ('%d', 'bars_with_value'),
-        ('%.5f', 'mean_y_dist_per_value'),
+        ('%d', 'value_chart_count'),
+        ('%.5f', 'value_acc_hard'),
+        ('%.5f', 'value_acc_relaxed'),
         ('%.5f', 'bar_precision'),
         ('%.5f', 'bar_recall'),
         ('%.5f', 'bar_f1'),
@@ -202,45 +199,62 @@ def main(args):
 
     def load_chart(data, full_data, targets):
         img = data[0].to(device, non_blocking=True)
-        full_img = full_data[0].cpu()
+        full_img = full_data[0]
         grid = (img.shape[1] // patch_size, img.shape[2] // patch_size)
         gt_org = targets[0][0].to(device, non_blocking=True)
-        gt_cls = targets[1][0].to(device, non_blocking=True)
-        gt_reg = targets[2][0].to(device, non_blocking=True)
-        return [img], full_img, [grid], gt_org, gt_cls, gt_reg
+        gt_bars = targets[1][0].to(device, non_blocking=True)
+        gt_ticks = targets[2][0].to(device, non_blocking=True)
+        gt_bar_values = targets[3][0].to(device, non_blocking=True)
+        return [img], full_img, [grid], gt_org, gt_bars, gt_ticks, gt_bar_values
 
-    def log_stats(split_name, stats):
+    def report_stats(split_name, stats):
         samples = stats['samples']
+        value_count = stats['value_chart_count']
 
         if samples == 0:
             logger.warning(f'[{split_name}] No samples available for evaluation.')
-            return
 
+        b_p = stats['bar_p'] / samples if samples > 0 else 0.0
+        b_r = stats['bar_r'] / samples if samples > 0 else 0.0
+        b_f1 = stats['bar_f1'] / samples if samples > 0 else 0.0
+        t_p = stats['tick_p'] / samples if samples > 0 else 0.0
+        t_r = stats['tick_r'] / samples if samples > 0 else 0.0
+        t_f1 = stats['tick_f1'] / samples if samples > 0 else 0.0
+
+        value_acc_hard = (
+            stats['value_hard_total'] / value_count
+            if value_count > 0 else 0.0
+        )
+        value_acc_relaxed = (
+            stats['value_relaxed_total'] / value_count
+            if value_count > 0 else 0.0
+        )
+
+        value_msg = (
+            f'value acc hard/relaxed={value_acc_hard:.4f}/{value_acc_relaxed:.4f} (n={value_count})'
+            if value_count > 0 else
+            'value acc hard/relaxed=n/a (n=0)'
+        )
         logger.info((
             f'[{split_name}] samples={samples} | '
-            f'bars P/R/F1={stats["bar_p"] / samples:.4f}/'
-            f'{stats["bar_r"] / samples:.4f}/'
-            f'{stats["bar_f1"] / samples:.4f} | '
-            f'ticks P/R/F1={stats["tick_p"] / samples:.4f}/'
-            f'{stats["tick_r"] / samples:.4f}/'
-            f'{stats["tick_f1"] / samples:.4f} | '
-            f'ocr_numeric={stats["ocr_numeric"]} | '
-            f'tick_text_matches={stats["tick_text_matches"]} | '
-            f'bars_with_value={stats["bars_with_value"]} | '
-            f'mean_y_dist_per_value={stats["y_dist_per_value_sum"] / max(stats["value_mapping_count"], 1):.5f}'
+            f'{value_msg} | '
+            f'bars P/R/F1={b_p:.4f}/{b_r:.4f}/{b_f1:.4f} | '
+            f'ticks P/R/F1={t_p:.4f}/{t_r:.4f}/{t_f1:.4f}'
         ))
 
-    def avg_stats(stats):
-        samples = stats['samples']
-        if samples == 0:
-            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        return (
-            stats['bar_p'] / samples,
-            stats['bar_r'] / samples,
-            stats['bar_f1'] / samples,
-            stats['tick_p'] / samples,
-            stats['tick_r'] / samples,
-            stats['tick_f1'] / samples
+        csv_logger.log(
+            split_name,
+            r_file,
+            samples,
+            value_count,
+            value_acc_hard,
+            value_acc_relaxed,
+            b_p,
+            b_r,
+            b_f1,
+            t_p,
+            t_r,
+            t_f1
         )
 
     encoder.eval()
@@ -248,11 +262,9 @@ def main(args):
 
     split_stats = {
         'samples': 0,
-        'ocr_numeric': 0,
-        'tick_text_matches': 0,
-        'bars_with_value': 0,
-        'y_dist_per_value_sum': 0.0,
-        'value_mapping_count': 0,
+        'value_hard_total': 0.0,
+        'value_relaxed_total': 0.0,
+        'value_chart_count': 0,
         'bar_p': 0.0,
         'bar_r': 0.0,
         'bar_f1': 0.0,
@@ -272,21 +284,12 @@ def main(args):
         )
 
         for data, full_data, targets in eval_iter:
-            img, full_img, grid, gt_org, gt_cls, gt_reg = load_chart(data, full_data, targets)
-            size = torch.tensor(gt_cls.shape, device=device)
+            img, full_img, grid, gt_org, gt_bars, gt_ticks, gt_bar_values = load_chart(data, full_data, targets)
+            size = torch.tensor(p_cls.shape[1:], device=device)
 
             # Inference
             h = encoder(img, grid)
             p_cls, p_reg, p_hm = [x[0] for x in decoder(h, grid)]
-
-            # Extract numeric OCR labels from full-resolution images.
-            if ocr_engine is not None:
-                numeric_text = ocr_engine.extract_numeric_text(full_img)
-
-            # Extract ground truth labels
-            _, gt_bars, gt_ticks = gt_maps_to_cls_lists(
-                gt_org, gt_cls, gt_reg, size
-            )
 
             # Radius for nms is based on max(H, W)
             radius_thresh = eval_thresh / size.max()
@@ -299,30 +302,12 @@ def main(args):
             # Filter predictions using nms
             p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
 
-            # Match each predicted tick to closest numeric OCR text
-            tick_text_matches = []
-            bar_value_pairs = []
-            y_dist_per_value = None
-            if ocr_engine is not None:
-                tick_text_matches = ocr_engine.match_ticks_to_numeric_text(
-                    p_ticks, numeric_text
-                )
-                bar_value_pairs, y_dist_per_value = ocr_engine.infer_bar_values(
-                    p_bars, tick_text_matches
-                )
-
             # Evaluate predictions
             b_p, b_r, b_f1, t_p, t_r, t_f1 = evaluate_gt_p_match(
                 gt_bars, gt_ticks, p_bars, p_ticks, radius_thresh
             )
 
             split_stats['samples'] += 1
-            split_stats['ocr_numeric'] += len(numeric_text)
-            split_stats['tick_text_matches'] += len(tick_text_matches)
-            split_stats['bars_with_value'] += len(bar_value_pairs)
-            if y_dist_per_value is not None:
-                split_stats['y_dist_per_value_sum'] += y_dist_per_value
-                split_stats['value_mapping_count'] += 1
             split_stats['bar_p'] += b_p
             split_stats['bar_r'] += b_r
             split_stats['bar_f1'] += b_f1
@@ -330,36 +315,22 @@ def main(args):
             split_stats['tick_r'] += t_r
             split_stats['tick_f1'] += t_f1
 
+            # Extract OCR text, match ticks, and infer bar values
+            if ocr_engine is not None:
+                pred_bar_centers, pred_bar_values = ocr_engine.infer_bar_values(
+                    p_bars, p_ticks, full_img
+                )
+                hard_acc, relaxed_acc = evaluate_value_accuracy(
+                    gt_bars, gt_bar_values, pred_bar_centers, pred_bar_values, radius_thresh
+                )
+                split_stats['value_hard_total'] += hard_acc
+                split_stats['value_relaxed_total'] += relaxed_acc
+                split_stats['value_chart_count'] += 1
+
         eval_iter.close()
 
     dataset_name = 'UB PMC' if is_ubpmc else 'Charts'
-
-    log_stats(dataset_name, split_stats)
-
-    b_p, b_r, b_f1, t_p, t_r, t_f1 = avg_stats(split_stats)
-    mean_y_dist_per_value = (
-        split_stats['y_dist_per_value_sum'] / split_stats['value_mapping_count']
-        if split_stats['value_mapping_count'] > 0 else 0.0
-    )
-
-    csv_logger.log(
-        dataset_name,
-        r_file,
-        pnt_thresh,
-        cls_thresh,
-        eval_thresh,
-        split_stats['samples'],
-        split_stats['ocr_numeric'],
-        split_stats['tick_text_matches'],
-        split_stats['bars_with_value'],
-        mean_y_dist_per_value,
-        b_p,
-        b_r,
-        b_f1,
-        t_p,
-        t_r,
-        t_f1
-    )
+    report_stats(dataset_name, split_stats)
 
     logger.info(f'Wrote eval metrics to {log_file}')
 

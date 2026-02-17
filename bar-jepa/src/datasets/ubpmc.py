@@ -1,5 +1,6 @@
 import os
 import json
+import numpy as np
 
 from logging import getLogger
 
@@ -11,6 +12,7 @@ import torchvision
 from torchvision.transforms import PILToTensor
 
 from src.utils.heatmap import cls_pts_to_maps
+from src.utils.numeric import extract_numeric_value
 
 _GLOBAL_SEED = 0
 logger = getLogger()
@@ -28,7 +30,7 @@ def make_ubpmc(
     root_path=None,
     split=None,
     training=True,
-    return_full_img=False,
+    eval_mode=False,
     val_train_split=True,
     drop_last=True,
     shuffle=False
@@ -42,7 +44,7 @@ def make_ubpmc(
         training=training,
         split=split,
         transform=transform,
-        return_full_img=return_full_img)
+        eval_mode=eval_mode)
 
     def create_sampler_loader(dataset):
         sampler = torch.utils.data.distributed.DistributedSampler( # type: ignore
@@ -81,7 +83,7 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
         training=True,
         split=None,
         transform=None,
-        return_full_img=False,
+        eval_mode=False,
     ):
         """
         UB PMC dataset loader
@@ -107,9 +109,10 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
 
         self.patch_size = patch_size
         self.transform = transform if transform is not None else PILToTensor()
-        self.return_full_img = return_full_img
+        self.eval_mode = eval_mode
         self.data_paths = []
 
+        # Filter out incompatible charts (missing gt)
         for fname in os.listdir(img_path):
             if fname.lower().endswith(('.png', '.jpg', '.jpeg')):
                 base_name = os.path.splitext(fname)[0]
@@ -125,24 +128,11 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
                 if not isinstance(ann, dict):
                     continue
 
-                task1 = ann.get('task1') or {}
-                task1_out = task1.get('output') or {}
-                if task1_out.get('chart_type') != 'vertical bar':
-                    continue
+                is_vertical = (ann.get('task1') or {}).get('output', {}).get('chart_type') == 'vertical bar'
+                y_axis = (ann.get('task4') or {}).get('output', {}).get('axes', {}).get('y-axis', [])
+                bars = (ann.get('task6') or {}).get('output', {}).get('visual elements', {}).get('bars', [])
 
-                if 'task6' not in ann or 'task4' not in ann:
-                    continue
-
-                task4 = ann.get('task4') or {}
-                task4_out = task4.get('output') or {}
-                axes = task4_out.get('axes') or {}
-                y_axis = axes.get('y-axis', [])
-                plot_bb = task4_out.get('_plot_bb')
-                task6 = ann.get('task6') or {}
-                task6_out = task6.get('output') or {}
-                bars = (task6_out.get('visual elements') or {}).get('bars', [])
-
-                if not plot_bb or not y_axis or not bars:
+                if not is_vertical or not y_axis or not bars:
                     continue
 
                 self.data_paths.append((img_full_path, ann_full_path))
@@ -159,86 +149,106 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
         ann_path = self.data_paths[idx][1]
 
         img_pil = Image.open(img_path).convert('RGB')
-        full_img = PILToTensor()(img_pil) if self.return_full_img else None
         size = torch.tensor(img_pil.size)
         img = self.transform(img_pil)
 
         with open(ann_path, 'r') as f:
             ann = json.load(f)
-        if not isinstance(ann, dict):
-            raise ValueError(f'Invalid annotation (not a dict): {ann_path}')
 
-        # Extract ticks from task4
-        task4 = ann.get('task4') or {}
-        task4_out = task4.get('output') or {}
-        axes = task4_out.get('axes') or {}
-        plot_bb = task4_out.get('_plot_bb')
+        # Extract ticks and bars
+        axes = ann.get('task4', {}).get('output', {}).get('axes', {})
+        bars_ann = ann.get('task6', {}).get('output', {}).get('visual elements', {}).get('bars', [])
+        data_series = ann.get('task6', {}).get('output', {}).get('data series', [])
 
-        # Extract bars from task6
-        task6 = ann.get('task6') or {}
-        task6_out = task6.get('output') or {}
-        bars = (task6_out.get('visual elements') or {}).get('bars', [])
-
-        # Find origin y using the '0' tick label, snapping to nearest y-axis tick
-        origin_y = None
-        task2 = ann.get('task2') or {}
-        task2_out = task2.get('output') or {}
-        text_blocks = task2_out.get('text_blocks', [])
-        task3 = ann.get('task3') or {}
-        task3_out = task3.get('output') or {}
-        text_roles = task3_out.get('text_roles', [])
-        role_by_id = {entry.get('id'): entry.get('role') for entry in text_roles}
-        zero_blocks = []
-        for block in text_blocks:
-            if role_by_id.get(block.get('id')) != 'tick_label':
-                continue
-            text = (block.get('text') or '').strip()
-            if text in {'0', '0.0', '0.00'}:
-                zero_blocks.append(block)
-        if zero_blocks and axes.get('y-axis'):
-            block = zero_blocks[0]
-            poly = block.get('polygon') or {}
-            ys = [poly.get(k) for k in ('y0', 'y1', 'y2', 'y3')]
-            ys = [y for y in ys if isinstance(y, (int, float))]
-            if ys:
-                label_y = sum(ys) / len(ys)
-                origin_tick = min(
-                    axes['y-axis'],
-                    key=lambda t: abs(t.get('tick_pt', {}).get('y', label_y) - label_y)
+        # Flatten y-values from task6 data series.
+        raw_bar_values = []
+        for series in data_series:
+            for point in (series.get('data') or []):
+                y_val = point.get('y')
+                raw_bar_values.append(
+                    float(y_val) if isinstance(y_val, (int, float)) else float('nan')
                 )
-                origin_y = origin_tick.get('tick_pt', {}).get('y')
-        if origin_y is None and axes.get('y-axis'):
-            origin_y = max(t.get('tick_pt', {}).get('y', 0) for t in axes['y-axis'])
+
+        # Determine origin tick from y-axis ticks
+        origin_tick_pt = None
+        text_blocks = ann.get('task2', {}).get('output', {}).get('text_blocks', [])
+        role_by_id = {
+            entry.get('id'): entry.get('role')
+            for entry in ann.get('task3', {}).get('output', {}).get('text_roles', [])
+            if entry.get('id') is not None
+        }
+
+        # Map block IDs to their parsed numeric values (for tick labels)
+        tick_value_by_id = {}
+        for block in text_blocks:
+            block_id = block.get('id')
+            if block_id is None:
+                continue
+            if role_by_id and role_by_id.get(block_id) != 'tick_label':
+                continue
+            value = extract_numeric_value(str(block.get('text', '')))
+            if value is not None:
+                tick_value_by_id[block_id] = value
+
+        # Extract y-axis ticks with valid coordinates and numeric values
+        y_axis_ticks = axes.get('y-axis', [])
+        tick_candidates = [
+            (tick_value_by_id[tick.get('id')], float(tick.get('tick_pt', {}).get('x')), float(tick.get('tick_pt', {}).get('y')))
+            for tick in y_axis_ticks
+            if (tick.get('id') in tick_value_by_id and
+                isinstance(tick.get('tick_pt', {}).get('x'), (int, float)) and
+                isinstance(tick.get('tick_pt', {}).get('y'), (int, float)))
+        ]
+
+        # Select origin tick point:
+        # 1. Prefer a tick with value 0 (if exists)
+        # 2. Otherwise, use the tick with the smallest absolute value
+        if tick_candidates:
+            zero_candidates = [entry for entry in tick_candidates if abs(entry[0]) < 1e-6]
+            selected = zero_candidates[0] if zero_candidates else min(tick_candidates, key=lambda p: p[0])
+            origin_tick_pt = (selected[1], selected[2])
 
         # Normalize axes tick points (sorted bottom -> top)
-        normalized_y_axis = []
+        ticks = []
         for tick in sorted(axes['y-axis'], key=lambda t: t['tick_pt']['y'], reverse=True):
-            normalized_y_axis.append(
+            ticks.append(
                 (torch.tensor([tick['tick_pt']['x'], tick['tick_pt']['y']]) / size).flip(-1)
             )
 
-        # Normalize bars
-        normalized_bars = []
-        for bar in sorted(bars, key=lambda b: b['x0']):
+        # Normalize bars (and choose bottom right corner for negative bars)
+        bar_entries = []
+        for i, bar in enumerate(bars_ann):
             y = bar['y0']
-            if origin_y is not None and y > origin_y:
+            if origin_tick_pt is not None and y > origin_tick_pt[1]:
                 y = bar['y0'] + bar['height']
             top_right = torch.tensor([bar['x0'] + bar['width'], y])
-            normalized_bars.append((top_right / size).flip(-1))
+            point = (top_right / size).flip(-1).clamp(0.0, 1.0)
+            bar_entries.append({
+                'x0': bar['x0'],
+                'point': point,
+                'value': raw_bar_values[i] if i < len(raw_bar_values) else float('nan')
+            })
 
-        # Normalize plot bounding box origin
-        org_y = origin_y if origin_y is not None else plot_bb['y0']  # type: ignore
-        org = (torch.tensor([plot_bb['x0'], org_y]) / size).flip(-1) # type: ignore
+        bar_entries.sort(key=lambda b: b['x0'])
+        bars = [entry['point'] for entry in bar_entries]
+        bar_values = [entry['value'] for entry in bar_entries]
 
-        # Prepare ticks and bars
-        ticks = normalized_y_axis
-        bars = normalized_bars
-        org_t = org
+        # Normalize coordinate origin directly from the resolved y-axis tick.
+        org = (torch.tensor([origin_tick_pt[0], origin_tick_pt[1]]) / size).flip(-1) # type: ignore
+
+        # For evaluation, don't convert to maps
+        if self.eval_mode:
+            gt_bars = torch.stack(bars)
+            gt_ticks = torch.stack(ticks)
+            gt_bar_values = torch.tensor(bar_values)
+            # OCR expects uint8 RGB, HWC.
+            full_img = np.array(img_pil, dtype=np.uint8, copy=True)
+            return img, full_img, (org, gt_bars, gt_ticks, gt_bar_values)
 
         # Map size depends on image size
         mapsize = (torch.tensor(img.shape[1:3]) // self.patch_size) * 4
         mapsize = torch.clamp(mapsize, min=1)
         # Generate class and regression maps
-        gt_org, gt_cls, gt_reg = cls_pts_to_maps([bars, ticks], org_t, mapsize)
+        gt_org, gt_cls, gt_reg = cls_pts_to_maps([bars, ticks], org, mapsize)
 
-        return img, full_img, (gt_org, gt_cls, gt_reg)
+        return img, (gt_org, gt_cls, gt_reg)

@@ -1,12 +1,6 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-#
-
 import os
 import json
+import numpy as np
 
 from logging import getLogger
 
@@ -35,7 +29,7 @@ def make_charts(
     root_path=None,
     val_train_split=True,
     decoder_training=True,
-    return_full_img=False,
+    eval_mode=False,
     training=True,
     drop_last=True,
     shuffle=False
@@ -49,7 +43,7 @@ def make_charts(
         transform=transform,
         training=training,
         decoder_training=decoder_training,
-        return_full_img=return_full_img)
+        eval_mode=eval_mode)
     logger.info('Chart dataset created')
 
     def create_sampler_loader(dataset):
@@ -89,7 +83,7 @@ class Charts(torchvision.datasets.DatasetFolder):
         transform=None,
         training=True,
         decoder_training=True,
-        return_full_img=False
+        eval_mode=False
     ):
         """
         Chart dataset loader
@@ -116,7 +110,7 @@ class Charts(torchvision.datasets.DatasetFolder):
             self.patch_size = patch_size
             self.transform = transform if transform is not None else PILToTensor()
             self.decoder_training = decoder_training
-            self.return_full_img = return_full_img
+            self.eval_mode = eval_mode
             self.data_paths = []
 
             for fname in os.listdir(img_path):
@@ -152,8 +146,6 @@ class Charts(torchvision.datasets.DatasetFolder):
         if not self.decoder_training:
             return img, 0
 
-        full_img = PILToTensor()(img_pil) if self.return_full_img else None
-
         # -- Annotations
         ann = json.load(open(ann_path))
 
@@ -166,15 +158,33 @@ class Charts(torchvision.datasets.DatasetFolder):
         for tick in ann['data']['value_axis']['ticks']:
             ticks.append((torch.tensor(tick['bbox'][:2]) / size).flip(-1))
 
-        bars = []
+        bar_entries = []
         # Bars are normalized x,y coordinates of a bar's top right corner
         for feature in ann['data']['features']:
             for bar in feature['data']:
-                bars.append((torch.tensor([bar['bbox'][2], bar['bbox'][1]]) / size).flip(-1))
+                bar_entries.append({
+                    'x': bar['bbox'][2],
+                    'point': (torch.tensor([bar['bbox'][2], bar['bbox'][1]]) / size).flip(-1),
+                    'value': float(bar['value'])
+                })
+
+        # Sort left to right
+        bar_entries.sort(key=lambda b: b['x'])
+        bars = [entry['point'] for entry in bar_entries]
+        bar_values = [entry['value'] for entry in bar_entries]
+
+        # For evaluation, don't convert to maps
+        if self.eval_mode:
+            gt_bars = torch.stack(bars)
+            gt_ticks = torch.stack(ticks)
+            gt_bar_values = torch.tensor(bar_values)
+            # OCR expects uint8 RGB, HWC.
+            full_img = np.array(img_pil, dtype=np.uint8, copy=True)
+            return img, full_img, (org, gt_bars, gt_ticks, gt_bar_values)
 
         # Map size depends on image size
         mapsize = (torch.tensor(img.shape[1:3]) // self.patch_size) * 4
         # Generate class and regression maps
         gt_org, gt_cls, gt_reg = cls_pts_to_maps([bars, ticks], org, mapsize)
 
-        return img, full_img, (gt_org, gt_cls, gt_reg)
+        return img, (gt_org, gt_cls, gt_reg)

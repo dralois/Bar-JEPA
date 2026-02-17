@@ -29,8 +29,7 @@ from src.transforms import make_transforms
 from src.utils.version import resolve_project_version
 
 from src.masks.charts import (
-    ChartsCollator,
-    UBPMCCollator
+    ChartsCollator
 )
 
 from src.utils.distributed import (
@@ -40,8 +39,7 @@ from src.utils.distributed import (
 
 from src.utils.heatmap import (
     gt_maps_to_cls_lists,
-    build_slot_heatmaps,
-    adaptive_wing_loss
+    build_slot_heatmaps
 )
 
 from src.utils.logging import (
@@ -201,7 +199,7 @@ def main(args, resume_preempt=False):
 
     # -- init data-loaders/samplers
     if is_ubpmc:
-        collator = UBPMCCollator()
+        collator = ChartsCollator()
         train_loader, train_sampler, val_loader, val_sampler = make_ubpmc( # type: ignore
                 transform=transform,
                 batch_size=batch_size,
@@ -213,7 +211,6 @@ def main(args, resume_preempt=False):
                 rank=rank,
                 root_path=root_path,
                 training=True,
-                return_full_img=False,
                 val_train_split=True,
                 drop_last=False,
                 shuffle=True)
@@ -232,7 +229,6 @@ def main(args, resume_preempt=False):
                 training=True,
                 val_train_split=True,
                 decoder_training=True,
-                return_full_img=False,
                 drop_last=False,
                 shuffle=True)
     ipe = len(train_loader)
@@ -520,12 +516,12 @@ def main(args, resume_preempt=False):
         # Train loop
         decoder.train()
         last_lr, last_wd = 0., 0.
-        for itr, (data, _, targets) in enumerate(train_loader):
+        for itr, (data, targets) in enumerate(train_loader):
             last_lr, last_wd = iteration_wrapper(itr, data, targets, True)
 
         # Validation loop
         decoder.eval()
-        for itr, (data, _, targets) in enumerate(val_loader):
+        for itr, (data, targets) in enumerate(val_loader):
             iteration_wrapper(itr, data, targets, False)
 
         # -- Save Checkpoint after every epoch
