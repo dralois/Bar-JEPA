@@ -289,8 +289,8 @@ def main(args):
             p_cls, p_reg, p_hm = [x[0] for x in decoder(h, grid)]
             size = torch.tensor(p_cls.shape[1:], device=device)
 
-            # Radius for nms is based on max(H, W)
-            radius_thresh = eval_thresh / size.max()
+            # Radius for all thresholds = thresh / (sqrt(H*W) / 4.0)
+            radius_thresh = eval_thresh / ((crop_size // patch_size) * 4.0)
 
             # Convert maps to bars & ticks + origin
             p_bars, p_ticks, _ = p_maps_to_cls_lists(
