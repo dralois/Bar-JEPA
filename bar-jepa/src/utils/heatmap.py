@@ -241,8 +241,7 @@ def p_maps_to_cls_lists(
     p_reg: torch.Tensor,
     size: torch.Tensor,
     bg_conf_thresh: float,
-    cls_conf_thresh: float,
-    score_norm: bool = False
+    cls_conf_thresh: float
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Extracts and processes predicted bars, ticks & origin
@@ -253,9 +252,6 @@ def p_maps_to_cls_lists(
     :param size: size of the map, shape [2]
     :param bg_conf_thresh: background confidence threshold
     :param cls_conf_thresh: classification confidence threshold
-    :param score_norm: if ``True``, use softmax normalization over bg/bar/tick
-        channels (mutually exclusive classes).\n
-        If ``False``, use legacy independent sigmoid scores.
     :return: tuple containing:
 
         - predicted bars [y, x, conf], shape [N, 3]
@@ -263,17 +259,10 @@ def p_maps_to_cls_lists(
         - [y, x] for predicted coordinate system origin
     """
 
-    if score_norm:
-        # Normalize bg/bar/tick per pixel
-        cls_scores = torch.softmax(p_cls[:3], dim=0)
-        pts_mask = cls_scores[0].lt(bg_conf_thresh)
-        bar_scores = cls_scores[1]
-        tick_scores = cls_scores[2]
-    else:
-        # Legacy independent per-channel probabilities.
-        pts_mask = torch.sigmoid(p_cls[0]).lt(bg_conf_thresh)
-        bar_scores = torch.sigmoid(p_cls[1])
-        tick_scores = torch.sigmoid(p_cls[2])
+    # Create mask for background pixels
+    pts_mask = torch.sigmoid(p_cls[0]).lt(bg_conf_thresh)
+    bar_scores = torch.sigmoid(p_cls[1])
+    tick_scores = torch.sigmoid(p_cls[2])
 
     # Select high confidence candidates from background-masked bars heatmap
     bar_idx = torch.nonzero(pts_mask & bar_scores.gt(cls_conf_thresh))

@@ -77,7 +77,6 @@ def main(args):
     pnt_thresh = args['keypoint']['pnt_detect_thresh']
     cls_thresh = args['keypoint']['cls_conf_thresh']
     eval_thresh = args['keypoint']['eval_thresh']
-    score_norm = args['keypoint']['score_norm']
 
     # -- LOGGING
     folder =  args['logging']['folder']
@@ -295,7 +294,7 @@ def main(args):
 
             # Convert maps to bars & ticks + origin
             p_bars, p_ticks, _ = p_maps_to_cls_lists(
-                p_cls, p_reg, size, pnt_thresh, cls_thresh, score_norm
+                p_cls, p_reg, size, pnt_thresh, cls_thresh
             )
 
             # Filter predictions using nms
