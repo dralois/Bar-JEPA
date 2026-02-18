@@ -59,16 +59,16 @@ def nms(
     return bar_out, tick_out
 
 
-def _hungarian_match(
+def hungarian_match(
     gt_points: torch.Tensor,
-    pred_points: torch.Tensor,
+    p_points: torch.Tensor,
     dist_thresh: float
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Matches GT and predictions with Hungarian matching under a distance threshold.
 
     :param gt_points: ground truth points [N, 2]
-    :param pred_points: predicted points [M, 2]
+    :param p_points: predicted points [M, 2]
     :param dist_thresh: max distance for a valid match
     :return: tuple containing:
 
@@ -79,11 +79,11 @@ def _hungarian_match(
     empty = torch.empty((0,), dtype=torch.long, device=device)
 
     # Nothing to match if either side is empty
-    if gt_points.size(0) == 0 or pred_points.size(0) == 0:
+    if gt_points.size(0) == 0 or p_points.size(0) == 0:
         return empty, empty
 
     # Pairwise distances between gt and predicted coords
-    diffs = gt_points.unsqueeze(1) - pred_points.unsqueeze(0)
+    diffs = gt_points.unsqueeze(1) - p_points.unsqueeze(0)
     distances = torch.sqrt((diffs * diffs).sum(dim=2))
 
     # Distances above threshold are not valid candidate matches
@@ -117,8 +117,8 @@ def evaluate_gt_p_match(
     """
     Evaluate predicted bars and ticks against ground truth.
 
-    :param gt_bars: ground truth bar positions, shape [N, 2]
-    :param gt_ticks: ground truth tick positions, shape [M, 2]
+    :param gt_bars: ground truth bars [y, x, value], shape [N, 3]
+    :param gt_ticks: ground truth ticks [y, x, value], shape [M, 3]
     :param p_bars: predicted bars [y, x, conf], shape [N, 3]
     :param p_ticks: predicted ticks [y, x, conf], shape [M, 3]
     :param dist_thresh: max. distance threshold when considering matches
@@ -127,8 +127,8 @@ def evaluate_gt_p_match(
         - bar precision, recall, f1
         - tick precision, recall, f1
     """
-    bar_rows, _ = _hungarian_match(gt_bars, p_bars[:, :2], dist_thresh)
-    tick_rows, _ = _hungarian_match(gt_ticks, p_ticks[:, :2], dist_thresh)
+    bar_rows, _ = hungarian_match(gt_bars[:, :2], p_bars[:, :2], dist_thresh)
+    tick_rows, _ = hungarian_match(gt_ticks[:, :2], p_ticks[:, :2], dist_thresh)
     bar_matches = int(bar_rows.numel())
     tick_matches = int(tick_rows.numel())
 
@@ -146,10 +146,8 @@ def evaluate_gt_p_match(
 
 
 def evaluate_value_accuracy(
-    gt_bars: torch.Tensor,
-    gt_values: torch.Tensor,
-    pred_bar_centers: torch.Tensor,
-    pred_bar_values: torch.Tensor,
+    gt_bar_yxv: torch.Tensor,
+    p_bar_yxv: torch.Tensor,
     dist_thresh: float,
     hard_eps: float = 0.02,
     relaxed_eps: float = 0.05
@@ -157,10 +155,8 @@ def evaluate_value_accuracy(
     """
     Evaluate bar-value accuracy with padded-count denominator.
 
-    :param gt_bars: ground truth bar positions [N, 2]
-    :param gt_values: ground truth bar values [N]
-    :param pred_bar_centers: predicted bar centers [M, 2]
-    :param pred_bar_values: predicted bar values [M]
+    :param gt_bar_yxv: ground truth bars [N, 3] as [y, x, value]
+    :param p_bar_yxv: predicted bars [M, 3] as [y, x, value]
     :param dist_thresh: max. spatial distance for matching bars
     :param hard_eps: strict relative error threshold
     :param relaxed_eps: relaxed relative error threshold
@@ -169,41 +165,41 @@ def evaluate_value_accuracy(
         - hard-threshold accuracy
         - relaxed-threshold accuracy
     """
+    gt_bars = gt_bar_yxv[:, :2]
+    gt_values = gt_bar_yxv[:, 2]
+    p_bars = p_bar_yxv[:, :2]
+    p_values = p_bar_yxv[:, 2]
+
     # Ignore invalid gt values
     valid_gt_mask = torch.isfinite(gt_values)
     if not bool(valid_gt_mask.any()):
         return 0.0, 0.0
 
-    gt_bars_valid = gt_bars[valid_gt_mask]
-    gt_vals_valid = gt_values[valid_gt_mask]
-    pred_count = int(min(pred_bar_centers.size(0), pred_bar_values.numel()))
-    total_count = max(int(gt_bars_valid.size(0)), pred_count)
-    if total_count == 0 or pred_count == 0:
+    p_count = int(min(p_bars.size(0), p_values.numel()))
+    total = max(int(gt_bars[valid_gt_mask].size(0)), p_count)
+    if total == 0 or p_count == 0:
         return 0.0, 0.0
 
-    pred_centers_eval = pred_bar_centers[:pred_count]
-    pred_values_eval = pred_bar_values[:pred_count]
-
     # Match predicted and gt bars using Hungarian assignment
-    gt_idx, pred_idx = _hungarian_match(
-        gt_bars_valid,
-        pred_centers_eval,
+    gt_idx, pred_idx = hungarian_match(
+        gt_bars[valid_gt_mask],
+        p_bars[:p_count],
         dist_thresh
     )
     if gt_idx.numel() == 0:
         return 0.0, 0.0
 
     # Criterion = abs(h_g - h_p) / h_g <= eps.
-    gt_matched = gt_vals_valid[gt_idx]
-    pred_matched = pred_values_eval[pred_idx]
+    gt_matched = gt_values[valid_gt_mask][gt_idx]
+    p_matched = p_values[:p_count][pred_idx]
     denom = gt_matched.abs().clamp(min=1e-8)
-    rel_err = (gt_matched - pred_matched).abs() / denom
+    rel_err = (gt_matched - p_matched).abs() / denom
 
     # Defaults: hard = 0.02, relaxed = 0.05
     hard_correct = int(rel_err.le(hard_eps).sum().item())
     relaxed_correct = int(rel_err.le(relaxed_eps).sum().item())
-    hard_acc = float(hard_correct / total_count)
-    relaxed_acc = float(relaxed_correct / total_count)
+    hard_acc = float(hard_correct / total)
+    relaxed_acc = float(relaxed_correct / total)
     return hard_acc, relaxed_acc
 
 

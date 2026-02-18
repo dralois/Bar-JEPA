@@ -204,8 +204,7 @@ def main(args):
         gt_org = targets[0][0].to(device, non_blocking=True)
         gt_bars = targets[1][0].to(device, non_blocking=True)
         gt_ticks = targets[2][0].to(device, non_blocking=True)
-        gt_bar_values = targets[3][0].to(device, non_blocking=True)
-        return [img], full_img, [grid], gt_org, gt_bars, gt_ticks, gt_bar_values
+        return [img], full_img, [grid], gt_org, gt_ticks, gt_bars
 
     def report_stats(split_name, stats):
         samples = stats['samples']
@@ -273,7 +272,7 @@ def main(args):
         'tick_f1': 0.0
     }
 
-    with torch.no_grad():
+    with torch.inference_mode():
         test_sampler.set_epoch(0)
 
         eval_iter = tqdm(
@@ -284,12 +283,12 @@ def main(args):
         )
 
         for data, full_data, targets in eval_iter:
-            img, full_img, grid, gt_org, gt_bars, gt_ticks, gt_bar_values = load_chart(data, full_data, targets)
-            size = torch.tensor(p_cls.shape[1:], device=device)
+            img, full_img, grid, gt_org, gt_ticks, gt_bars = load_chart(data, full_data, targets)
 
             # Inference
             h = encoder(img, grid)
             p_cls, p_reg, p_hm = [x[0] for x in decoder(h, grid)]
+            size = torch.tensor(p_cls.shape[1:], device=device)
 
             # Radius for nms is based on max(H, W)
             radius_thresh = eval_thresh / size.max()
@@ -317,11 +316,11 @@ def main(args):
 
             # Extract OCR text, match ticks, and infer bar values
             if ocr_engine is not None:
-                pred_bar_centers, pred_bar_values = ocr_engine.infer_bar_values(
-                    p_bars, p_ticks, full_img
+                p_bars_yxv = ocr_engine.infer_bar_values(
+                    p_bars, p_ticks, full_img, radius_thresh * 5.
                 )
                 hard_acc, relaxed_acc = evaluate_value_accuracy(
-                    gt_bars, gt_bar_values, pred_bar_centers, pred_bar_values, radius_thresh
+                    gt_bars, p_bars_yxv, radius_thresh
                 )
                 split_stats['value_hard_total'] += hard_acc
                 split_stats['value_relaxed_total'] += relaxed_acc

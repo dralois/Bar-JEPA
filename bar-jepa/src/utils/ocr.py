@@ -1,9 +1,10 @@
 import numpy as np
 import torch
 
-from typing import List, Tuple
+from typing import List
 
 from src.utils.numeric import extract_numeric_value
+from src.utils.postprocessing import hungarian_match
 
 
 def _normalize_polygon(
@@ -66,26 +67,23 @@ class NumericOCR:
         self,
         bars: torch.Tensor,
         ticks: torch.Tensor,
-        image: np.ndarray
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        image: np.ndarray,
+        dist_thresh: float
+    ) -> torch.Tensor:
         """
         Extracts numeric OCR text, matches ticks to OCR numbers, and infers bar values.
 
         :param bars: predicted bars [y, x, conf], shape [N, 3]
         :param ticks: predicted ticks [y, x, conf], shape [N, 3]
         :param image: full-resolution image array, shape [H, W, 3], dtype uint8
-        :return: tuple containing:
-
-            - predicted bar centers [B, 2] (sorted left -> right)
-            - predicted bar values [B]
+        :param dist_thresh: max. spatial distance for matching ticks with ocr detections
+        :return: predicted bars with values [B, 3] as [y, x, value], sorted left -> right
         """
         device = bars.device
         h, w = image.shape[:2]
 
-        if bars.size(0) == 0 or ticks.size(0) == 0:
-            empty_centers = torch.empty((0, 2), device=device)
-            empty_values = torch.empty((0,), device=device)
-            return empty_centers, empty_values
+        if bars.size(0) == 0 or ticks.size(0) == 0 or not self.available:
+            return torch.empty((0, 3), device=device)
 
         raw = self._engine.ocr(image, cls=True)
         pages = raw or []
@@ -111,37 +109,21 @@ class NumericOCR:
                 values.append(float(value))
 
         if len(values) == 0:
-            text_centers = torch.empty((0, 2), device=device)
-            text_values = torch.empty((0,), device=device)
+            return torch.empty((0, 3), device=device)
         else:
             text_centers = torch.tensor(centers, device=device)
             text_values = torch.tensor(values, device=device)
 
-        if text_centers.size(0) == 0:
-            empty_centers = torch.empty((0, 2), device=device)
-            empty_values = torch.empty((0,), device=device)
-            return empty_centers, empty_values
-
-        # Match each tick to closest OCR number and deduplicate text assignments
+        # Match ticks and OCR texts one-to-one with Hungarian matching.
         tick_centers = ticks[:, :2]
-        diffs = tick_centers.unsqueeze(1) - text_centers.unsqueeze(0)
-        distances = torch.sqrt((diffs * diffs).sum(dim=2))
-        best_dist, best_text_idx = distances.min(dim=1)
+        tick_idx, text_idx = hungarian_match(
+            tick_centers,
+            text_centers,
+            dist_thresh
+        )
+        if tick_idx.numel() == 0:
+            return torch.empty((0, 3), device=device)
 
-        kept_tick_idx = []
-        kept_text_idx = []
-        unique_text_idx = torch.unique(best_text_idx)
-
-        # For each unique OCR text, select the closest tick mark
-        for text_idx in unique_text_idx.tolist():
-            candidate_tick_idx = torch.nonzero(best_text_idx == text_idx, as_tuple=False).flatten()
-            local_best = torch.argmin(best_dist[candidate_tick_idx])
-            selected_tick_idx = candidate_tick_idx[local_best]
-            kept_tick_idx.append(int(selected_tick_idx.item()))
-            kept_text_idx.append(int(text_idx))
-
-        tick_idx = torch.tensor(kept_tick_idx, device=device, dtype=torch.long)
-        text_idx = torch.tensor(kept_text_idx, device=device, dtype=torch.long)
         matched_tick_centers = tick_centers[tick_idx]
         matched_values = text_values[text_idx]
 
@@ -152,9 +134,7 @@ class NumericOCR:
 
         # Need at least two matched ticks to fit value(y) line
         if matched_tick_centers.size(0) < 2:
-            empty_centers = torch.empty((0, 2), device=device)
-            empty_values = torch.empty((0,), device=device)
-            return empty_centers, empty_values
+            return torch.empty((0, 3), device=device)
 
         # Fit value = slope * y + intercept from matched tick pairs using RANSAC
         ys_np = matched_tick_centers[:, 0].detach().cpu().numpy().reshape(-1, 1)
@@ -169,4 +149,6 @@ class NumericOCR:
         bar_centers = bars[:, :2]
         pred_values = slope * bar_centers[:, 0] + intercept
         order = torch.argsort(bar_centers[:, 1])
-        return bar_centers[order], pred_values[order]
+        sorted_centers = bar_centers[order]
+        sorted_values = pred_values[order].unsqueeze(1)
+        return torch.cat((sorted_centers, sorted_values), dim=1)

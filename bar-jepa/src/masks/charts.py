@@ -19,14 +19,10 @@ class ChartsCollator(object):
 class EvalCollator(object):
 
     def __call__(self, batch):
-        # [[img, full_img, [org, bars, ticks, bar_values]]]
+        # [[img, full_img, [org, bar_yxv, tick_yxv]]]
         imgs = [item[0] for item in batch]
         full_imgs = [item[1] for item in batch]
-        if len(batch[0][2]) != 4:
-            raise ValueError('EvalCollator expects targets as (org, bars, ticks, bar_values).')
         gt_org = [item[2][0] for item in batch]
-        gt_bars = [item[2][1] for item in batch]
-        gt_ticks = [item[2][2] for item in batch]
-        gt_bar_values = [item[2][3] for item in batch]
-
-        return imgs, full_imgs, (gt_org, gt_bars, gt_ticks, gt_bar_values)
+        gt_bar_yxv = [item[2][1] for item in batch]
+        gt_tick_yxv = [item[2][2] for item in batch]
+        return imgs, full_imgs, (gt_org, gt_bar_yxv, gt_tick_yxv)

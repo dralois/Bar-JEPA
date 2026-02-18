@@ -98,7 +98,7 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
             annotation_folder = os.path.join('train', 'annotations_JSON', 'vertical_bar')
         else:
             split = split or 'split_4'
-            image_folder = os.path.join('test', 'chart_images', split)
+            image_folder = os.path.join('test', 'chart_images', split, 'images')
             annotation_folder = os.path.join('test', 'final_full_GT', split, 'annotations_JSON')
 
         img_path = os.path.join(root, image_folder)
@@ -143,10 +143,8 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
     def __len__(self):
         return len(self.data_paths)
 
-
     def __getitem__(self, idx):
-        img_path = self.data_paths[idx][0]
-        ann_path = self.data_paths[idx][1]
+        img_path, ann_path = self.data_paths[idx]
 
         img_pil = Image.open(img_path).convert('RGB')
         size = torch.tensor(img_pil.size)
@@ -160,18 +158,24 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
         bars_ann = ann.get('task6', {}).get('output', {}).get('visual elements', {}).get('bars', [])
         data_series = ann.get('task6', {}).get('output', {}).get('data series', [])
 
-        # Flatten y-values from task6 data series.
-        raw_bar_values = []
+        # Extract y-values from task6 data series
+        series_values = []
         for series in data_series:
+            vals = []
             for point in (series.get('data') or []):
-                y_val = point.get('y')
-                raw_bar_values.append(
-                    float(y_val) if isinstance(y_val, (int, float)) else float('nan')
-                )
+                vals.append(float(point.get('y')))
+            if len(vals) > 0:
+                series_values.append(vals)
 
-        # Determine origin tick from y-axis ticks
-        origin_tick_pt = None
-        text_blocks = ann.get('task2', {}).get('output', {}).get('text_blocks', [])
+        # Align values to visual bars sorted left -> right
+        lengths = {len(vals) for vals in series_values}
+        cat_count = next(iter(lengths))
+        raw_bar_values = [
+            series_values[series_idx][cat_idx]
+            for cat_idx in range(cat_count)
+            for series_idx in range(len(series_values))
+        ]
+
         role_by_id = {
             entry.get('id'): entry.get('role')
             for entry in ann.get('task3', {}).get('output', {}).get('text_roles', [])
@@ -180,7 +184,7 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
 
         # Map block IDs to their parsed numeric values (for tick labels)
         tick_value_by_id = {}
-        for block in text_blocks:
+        for block in ann.get('task2', {}).get('output', {}).get('text_blocks', []):
             block_id = block.get('id')
             if block_id is None:
                 continue
@@ -200,50 +204,42 @@ class UBPMCDataset(torchvision.datasets.DatasetFolder):
                 isinstance(tick.get('tick_pt', {}).get('y'), (int, float)))
         ]
 
-        # Select origin tick point:
-        # 1. Prefer a tick with value 0 (if exists)
-        # 2. Otherwise, use the tick with the smallest absolute value
-        if tick_candidates:
-            zero_candidates = [entry for entry in tick_candidates if abs(entry[0]) < 1e-6]
-            selected = zero_candidates[0] if zero_candidates else min(tick_candidates, key=lambda p: p[0])
-            origin_tick_pt = (selected[1], selected[2])
+        # Determine origin
+        zero_candidates = [entry for entry in tick_candidates if abs(entry[0]) < 1e-6]
+        selected = zero_candidates[0] if len(zero_candidates) > 0 else min(tick_candidates, key=lambda p: p[0])
+        origin_tick_pt = (selected[1], selected[2])
 
-        # Normalize axes tick points (sorted bottom -> top)
-        ticks = []
-        for tick in sorted(axes['y-axis'], key=lambda t: t['tick_pt']['y'], reverse=True):
-            ticks.append(
-                (torch.tensor([tick['tick_pt']['x'], tick['tick_pt']['y']]) / size).flip(-1)
-            )
+        # Sort ticks by y-coordinate & extract value
+        sorted_y_ticks = sorted(y_axis_ticks, key=lambda t: t['tick_pt']['y'], reverse=True)
+        ticks = [
+            (torch.tensor([tick['tick_pt']['x'], tick['tick_pt']['y']]) / size).flip(-1)
+            for tick in sorted_y_ticks
+        ]
+        tick_values = [
+            float(tick_value_by_id.get(tick.get('id'), float('nan')))
+            for tick in sorted_y_ticks
+        ]
 
         # Normalize bars (and choose bottom right corner for negative bars)
-        bar_entries = []
-        for i, bar in enumerate(bars_ann):
+        bars = []
+        bar_values = []
+        for i, bar in enumerate(sorted(bars_ann, key=lambda bar: bar['x0'])):
             y = bar['y0']
-            if origin_tick_pt is not None and y > origin_tick_pt[1]:
+            if y > origin_tick_pt[1]:
                 y = bar['y0'] + bar['height']
             top_right = torch.tensor([bar['x0'] + bar['width'], y])
             point = (top_right / size).flip(-1).clamp(0.0, 1.0)
-            bar_entries.append({
-                'x0': bar['x0'],
-                'point': point,
-                'value': raw_bar_values[i] if i < len(raw_bar_values) else float('nan')
-            })
-
-        bar_entries.sort(key=lambda b: b['x0'])
-        bars = [entry['point'] for entry in bar_entries]
-        bar_values = [entry['value'] for entry in bar_entries]
+            bars.append(point)
+            bar_values.append(raw_bar_values[i])
 
         # Normalize coordinate origin directly from the resolved y-axis tick.
-        org = (torch.tensor([origin_tick_pt[0], origin_tick_pt[1]]) / size).flip(-1) # type: ignore
+        org = (torch.tensor([origin_tick_pt[0], origin_tick_pt[1]]) / size).flip(-1)
 
         # For evaluation, don't convert to maps
         if self.eval_mode:
-            gt_bars = torch.stack(bars)
-            gt_ticks = torch.stack(ticks)
-            gt_bar_values = torch.tensor(bar_values)
-            # OCR expects uint8 RGB, HWC.
-            full_img = np.array(img_pil, dtype=np.uint8, copy=True)
-            return img, full_img, (org, gt_bars, gt_ticks, gt_bar_values)
+            gt_bar_yxv = torch.cat((torch.stack(bars), torch.tensor(bar_values).unsqueeze(1)), dim=1)
+            gt_tick_yxv = torch.cat((torch.stack(ticks), torch.tensor(tick_values).unsqueeze(1)), dim=1)
+            return img, np.asarray(img_pil, dtype=np.uint8), (org, gt_bar_yxv, gt_tick_yxv)
 
         # Map size depends on image size
         mapsize = (torch.tensor(img.shape[1:3]) // self.patch_size) * 4

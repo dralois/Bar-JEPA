@@ -12,6 +12,7 @@ import torchvision
 from torchvision.transforms import PILToTensor
 
 from src.utils.heatmap import cls_pts_to_maps
+from src.utils.numeric import extract_numeric_value
 
 _GLOBAL_SEED = 0
 logger = getLogger()
@@ -153,10 +154,17 @@ class Charts(torchvision.datasets.DatasetFolder):
         size = torch.tensor(ann['chart_metadata']['size']['bbox'][2:])
         org = (torch.tensor(ann['chart_metadata']['origin']['bbox'][:2]) / size).flip(-1)
 
-        ticks = []
+        tick_entries = []
         # Ticks are normalized x,y coordinates of the tick location
         for tick in ann['data']['value_axis']['ticks']:
-            ticks.append((torch.tensor(tick['bbox'][:2]) / size).flip(-1))
+            point = (torch.tensor(tick['bbox'][:2]) / size).flip(-1)
+            tick_value = float(extract_numeric_value(tick['label']['text']))
+            tick_entries.append({
+                'point': point,
+                'value': tick_value
+            })
+        ticks = [entry['point'] for entry in tick_entries]
+        tick_values = [entry['value'] for entry in tick_entries]
 
         bar_entries = []
         # Bars are normalized x,y coordinates of a bar's top right corner
@@ -175,12 +183,9 @@ class Charts(torchvision.datasets.DatasetFolder):
 
         # For evaluation, don't convert to maps
         if self.eval_mode:
-            gt_bars = torch.stack(bars)
-            gt_ticks = torch.stack(ticks)
-            gt_bar_values = torch.tensor(bar_values)
-            # OCR expects uint8 RGB, HWC.
-            full_img = np.array(img_pil, dtype=np.uint8, copy=True)
-            return img, full_img, (org, gt_bars, gt_ticks, gt_bar_values)
+            gt_bar_yxv = torch.cat((torch.stack(bars), torch.tensor(bar_values).unsqueeze(1)), dim=1)
+            gt_tick_yxv = torch.cat((torch.stack(ticks), torch.tensor(tick_values).unsqueeze(1)), dim=1)
+            return img, np.asarray(img_pil, dtype=np.uint8), (org, gt_bar_yxv, gt_tick_yxv)
 
         # Map size depends on image size
         mapsize = (torch.tensor(img.shape[1:3]) // self.patch_size) * 4
