@@ -7,7 +7,7 @@ data:
   crop_size: 224
   num_workers: 10
   pin_mem: true
-  root_path: ./data_enc_ft
+  root_path: ./CTT
   is_ctt: true
   use_color_distortion: false
   use_gaussian_blur: false
@@ -36,8 +36,8 @@ meta:
   model_name: vit_huge
   pred_depth: 12
   pred_emb_dim: 384
-  read_checkpoint: model/jepa-vanilla.pth.tar
-  checkpoint_epoch: 300
+  read_checkpoint: jepa-ep50.pth.tar
+  checkpoint_epoch: 50
   do_finetune: true
   use_bfloat16: true
 optimization:
