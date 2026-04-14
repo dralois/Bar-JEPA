@@ -14,6 +14,7 @@ Usage:
   scripts/submit_viscom.sh --mode decoder-finetune --preset simple [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder-finetune --preset arp-highlr [--gpus 6000:1]
   scripts/submit_viscom.sh --mode finetune --preset arp [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode finetune --preset ctt [--gpus 6000:1]
 EOF
 }
 
@@ -75,11 +76,11 @@ elif [[ "$MODE" == "decoder-finetune" ]]; then
   RUN_MODE="decoder"
 else
   case "$PRESET" in
-    arp) CONFIG="vith14_arp.yaml" ;;
-    noarp) CONFIG="vith14_noarp.yaml" ;;
+    arp)   CONFIG="vith14_arp.yaml";  CONFIG_DIR="charts" ;;
+    noarp) CONFIG="vith14_noarp.yaml"; CONFIG_DIR="charts" ;;
+    ctt)   CONFIG="vith14_arp.yaml";  CONFIG_DIR="charts/finetune" ;;
     *) echo "Error: unknown preset '$PRESET' for finetune." >&2; usage; exit 1 ;;
   esac
-  CONFIG_DIR="charts"
 fi
 
 GPU_COUNT="${GPUS##*:}"

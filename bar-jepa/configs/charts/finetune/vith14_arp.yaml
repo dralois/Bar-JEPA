@@ -1,21 +1,21 @@
 data:
-  batch_size: 4
+  batch_size: 20
   color_jitter_strength: 0.0
   crop_scale:
   - 0.5
   - 1.0
   crop_size: 224
-  num_workers: 1
-  pin_mem: false
-  root_path: ./data
-  is_ctt: false
+  num_workers: 10
+  pin_mem: true
+  root_path: ./data_enc_ft
+  is_ctt: true
   use_color_distortion: false
   use_gaussian_blur: false
   use_horizontal_flip: false
   preserve_aspect_ratio: true
 logging:
-  folder: ./output
-  write_tag: jepa
+  folder: ./output_arp
+  write_tag: jepa-ft
 mask:
   allow_overlap: false
   aspect_ratio:
@@ -32,23 +32,23 @@ mask:
   - 0.15
   - 0.2
 meta:
-  load_checkpoint: false
-  model_name: vit_tiny
+  load_checkpoint: true
+  model_name: vit_huge
   pred_depth: 12
-  pred_emb_dim: 192
-  read_checkpoint: null
-  checkpoint_epoch: 0
+  pred_emb_dim: 384
+  read_checkpoint: model/jepa-vanilla.pth.tar
+  checkpoint_epoch: 300
   do_finetune: true
   use_bfloat16: true
 optimization:
   ema:
   - 0.996
   - 1.0
-  epochs: 50
-  final_lr: 1.0e-06
-  final_weight_decay: 0.05
+  epochs: 25
+  final_lr: 5.0e-07
+  final_weight_decay: 0.06
   ipe_scale: 1.0
-  lr: 1.0e-05
-  start_lr: 1.0e-06
+  lr: 2.5e-05
+  start_lr: 2.5e-06
   warmup: 3
-  weight_decay: 0.05
+  weight_decay: 0.03

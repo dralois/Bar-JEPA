@@ -33,6 +33,7 @@ from torch.nn.parallel import DistributedDataParallel
 from src.masks.multiblock import MaskCollator as MBMaskCollator
 from src.utils.tensors import repeat_interleave_batch, pack_by_masks
 from src.datasets.charts import make_charts
+from src.datasets.ctt import make_ctt
 from src.transforms import make_transforms
 
 from src.utils.distributed import (
@@ -75,57 +76,58 @@ def main(args, resume_preempt=False):
     #  PASSED IN PARAMS FROM CONFIG FILE
     # ----------------------------------------------------------------------- #
 
-    # -- META
-    use_bfloat16 = args['meta']['use_bfloat16']
-    model_name = args['meta']['model_name']
-    load_model = args['meta']['load_checkpoint'] or resume_preempt
-    ckpt_epoch = args['meta']['checkpoint_epoch']
-    do_finetune = args['meta']['do_finetune']
-    r_file = args['meta']['read_checkpoint']
-    pred_depth = args['meta']['pred_depth']
-    pred_emb_dim = args['meta']['pred_emb_dim']
-
     # -- DATA
+    batch_size = args['data']['batch_size']
+    color_jitter = args['data']['color_jitter_strength']
+    crop_scale = args['data']['crop_scale']
+    crop_size = args['data']['crop_size']
+    num_workers = args['data']['num_workers']
+    pin_mem = args['data']['pin_mem']
+    root_path = args['data']['root_path']
+    is_ctt = args['data']['is_ctt']
+    # --
+    use_color_distortion = args['data']['use_color_distortion']
     use_gaussian_blur = args['data']['use_gaussian_blur']
     use_horizontal_flip = args['data']['use_horizontal_flip']
-    use_color_distortion = args['data']['use_color_distortion']
-    color_jitter = args['data']['color_jitter_strength']
     preserve_aspect_ratio = args['data']['preserve_aspect_ratio']
     # --
-    batch_size = args['data']['batch_size']
-    pin_mem = args['data']['pin_mem']
-    num_workers = args['data']['num_workers']
-    root_path = args['data']['root_path']
-    crop_size = args['data']['crop_size']
-    crop_scale = args['data']['crop_scale']
-    # --
-
-    # -- MASK
-    allow_overlap = args['mask']['allow_overlap']  # whether to allow overlap b/w context and target blocks
-    patch_size = args['mask']['patch_size']  # patch-size for model training
-    patch_count = int((crop_size // patch_size) ** 2.)
-    num_enc_masks = args['mask']['num_enc_masks']  # number of context blocks
-    min_keep = args['mask']['min_keep']  # min number of patches in context block
-    enc_mask_scale = args['mask']['enc_mask_scale']  # scale of context blocks
-    num_pred_masks = args['mask']['num_pred_masks']  # number of target blocks
-    pred_mask_scale = args['mask']['pred_mask_scale']  # scale of target blocks
-    aspect_ratio = args['mask']['aspect_ratio']  # aspect ratio of target blocks
-    # --
-
-    # -- OPTIMIZATION
-    ema = args['optimization']['ema']
-    ipe_scale = args['optimization']['ipe_scale']  # scheduler scale factor (def: 1.0)
-    wd = float(args['optimization']['weight_decay'])
-    final_wd = float(args['optimization']['final_weight_decay'])
-    num_epochs = args['optimization']['epochs']
-    warmup = args['optimization']['warmup']
-    start_lr = args['optimization']['start_lr']
-    lr = args['optimization']['lr']
-    final_lr = args['optimization']['final_lr']
 
     # -- LOGGING
     folder = args['logging']['folder']
     tag = args['logging']['write_tag']
+
+    # -- MASK
+    allow_overlap = args['mask']['allow_overlap']  # whether to allow overlap b/w context and target blocks
+    aspect_ratio = args['mask']['aspect_ratio']  # aspect ratio of target blocks
+    enc_mask_scale = args['mask']['enc_mask_scale']  # scale of context blocks
+    min_keep = args['mask']['min_keep']  # min number of patches in context block
+    num_enc_masks = args['mask']['num_enc_masks']  # number of context blocks
+    num_pred_masks = args['mask']['num_pred_masks']  # number of target blocks
+    patch_size = args['mask']['patch_size']  # patch-size for model training
+    pred_mask_scale = args['mask']['pred_mask_scale']  # scale of target blocks
+    patch_count = int((crop_size // patch_size) ** 2.)
+    # --
+
+    # -- META
+    load_model = args['meta']['load_checkpoint'] or resume_preempt
+    model_name = args['meta']['model_name']
+    pred_depth = args['meta']['pred_depth']
+    pred_emb_dim = args['meta']['pred_emb_dim']
+    r_file = args['meta']['read_checkpoint']
+    ckpt_epoch = args['meta']['checkpoint_epoch']
+    do_finetune = args['meta']['do_finetune']
+    use_bfloat16 = args['meta']['use_bfloat16']
+
+    # -- OPTIMIZATION
+    ema = args['optimization']['ema']
+    num_epochs = args['optimization']['epochs']
+    final_lr = args['optimization']['final_lr']
+    final_wd = float(args['optimization']['final_weight_decay'])
+    ipe_scale = args['optimization']['ipe_scale']  # scheduler scale factor (def: 1.0)
+    lr = args['optimization']['lr']
+    start_lr = args['optimization']['start_lr']
+    warmup = args['optimization']['warmup']
+    wd = float(args['optimization']['weight_decay'])
 
     dump = os.path.join(folder, 'params-ijepa.yaml')
     with open(dump, 'w') as f:
@@ -223,7 +225,23 @@ def main(args, resume_preempt=False):
         patch_size=patch_size)
 
     # -- init data-loaders/samplers
-    unsupervised_loader, unsupervised_sampler = make_charts( # type: ignore
+    if is_ctt:
+        unsupervised_loader, unsupervised_sampler = make_ctt(  # type: ignore
+            transform=transform,
+            batch_size=batch_size,
+            patch_size=patch_size,
+            collator=mask_collator,
+            pin_mem=pin_mem,
+            num_workers=num_workers,
+            world_size=world_size,
+            rank=rank,
+            root_path=root_path,
+            include_multicol=True,
+            val_train_split=False,
+            drop_last=True,
+            shuffle=True)
+    else:
+        unsupervised_loader, unsupervised_sampler = make_charts(  # type: ignore
             transform=transform,
             batch_size=batch_size,
             patch_size=patch_size,

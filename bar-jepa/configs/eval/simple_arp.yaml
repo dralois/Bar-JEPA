@@ -17,7 +17,6 @@ logging:
   folder: ./output
   write_tag: eval_simple_arp
 ocr:
-  enabled: true
   language: en
   rec_model: latin_PP-OCRv5_mobile_rec
 meta:

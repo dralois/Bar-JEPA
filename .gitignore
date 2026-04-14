@@ -218,6 +218,7 @@ __marimo__/
 # Own stuff
 output/**
 UBPMC/**
+CTT/**
 .DS_STORE
 data/**
 data_small/**
