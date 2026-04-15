@@ -8,11 +8,13 @@ Usage:
   scripts/submit_viscom.sh --mode decoder --preset noarp [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder --preset vanilla [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder --preset simple [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder --preset arp-ctt [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder-finetune --preset arp [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder-finetune --preset noarp [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder-finetune --preset vanilla [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder-finetune --preset simple [--gpus 6000:1]
   scripts/submit_viscom.sh --mode decoder-finetune --preset arp-highlr [--gpus 6000:1]
+  scripts/submit_viscom.sh --mode decoder-finetune --preset arp-ctt [--gpus 6000:1]
   scripts/submit_viscom.sh --mode finetune --preset arp [--gpus 6000:1]
   scripts/submit_viscom.sh --mode finetune --preset ctt [--gpus 6000:1]
 EOF
@@ -60,6 +62,7 @@ if [[ "$MODE" == "decoder" ]]; then
     noarp) CONFIG="classic_noarp.yaml" ;;
     simple) CONFIG="simple_arp.yaml" ;;
     vanilla) CONFIG="classic_vanilla.yaml" ;;
+    arp-ctt) CONFIG="classic_arp_ctt.yaml" ;;
     *) echo "Error: unknown preset '$PRESET' for decoder." >&2; usage; exit 1 ;;
   esac
   CONFIG_DIR="keypoint"
@@ -67,6 +70,7 @@ elif [[ "$MODE" == "decoder-finetune" ]]; then
   case "$PRESET" in
     arp) CONFIG="classic_arp.yaml" ;;
     arp-highlr) CONFIG="classic_arp_highlr.yaml" ;;
+    arp-ctt) CONFIG="classic_arp_ctt.yaml" ;;
     noarp) CONFIG="classic_noarp.yaml" ;;
     simple) CONFIG="simple_arp.yaml" ;;
     vanilla) CONFIG="classic_vanilla.yaml" ;;
