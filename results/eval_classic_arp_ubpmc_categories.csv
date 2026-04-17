@@ -1,0 +1,7 @@
+category, bucket , samples, bar_f1 , tick_f1
+bars    , in_dist, 98     , 0.79783, 0.83727
+bars    , ood    , 41     , 0.60143, 0.80220
+ticks   , in_dist, 120    , 0.74586, 0.83919
+ticks   , ood    , 19     , 0.70225, 0.74945
+ar      , in_dist, 41     , 0.77743, 0.87123
+ar      , ood    , 98     , 0.72420, 0.80839

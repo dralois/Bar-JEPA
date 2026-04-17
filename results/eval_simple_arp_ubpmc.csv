@@ -1,0 +1,2 @@
+samples,acc_hard,acc_relaxed,oracle_acc_hard,oracle_acc_relaxed,bar_precision,bar_recall,bar_f1,tick_precision,tick_recall,tick_f1
+139,0.00485,0.00885,0.00516,0.01075,0.19694,0.06196,0.08454,0.26786,0.17509,0.17798

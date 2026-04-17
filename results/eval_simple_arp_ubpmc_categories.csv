@@ -1,0 +1,7 @@
+category,bucket,samples,bar_f1,tick_f1
+bars,in_dist,98,0.06538,0.18936
+bars,ood,41,0.13033,0.15079
+ticks,in_dist,120,0.08627,0.18517
+ticks,ood,19,0.07359,0.13257
+ar,in_dist,41,0.06708,0.20531
+ar,ood,98,0.09184,0.16654
