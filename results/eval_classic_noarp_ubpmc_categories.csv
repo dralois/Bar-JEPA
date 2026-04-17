@@ -3,12 +3,5 @@ bars    , in_dist,      98, 0.77966, 0.85050
 bars    , ood    ,      41, 0.56255, 0.71886
 ticks   , in_dist,     120, 0.72352, 0.84148
 ticks   , ood    ,      19, 0.66574, 0.62338
-ar      , in_dist,      38, 0.72905, 0.80069
-ar      , ood    ,     101, 0.71057, 0.81580
-category,bucket,samples,bar_f1,tick_f1
-bars,in_dist,98,0.77966,0.85050
-bars,ood,41,0.56255,0.71886
-ticks,in_dist,120,0.72352,0.84148
-ticks,ood,19,0.66574,0.62338
-ar,in_dist,41,0.71705,0.80668
-ar,ood,98,0.71502,0.81376
+ar      , in_dist,      41, 0.71705, 0.80668
+ar      , ood    ,      98, 0.71502, 0.81376

@@ -1,7 +1,7 @@
-category,bucket,samples,bar_f1,tick_f1
-bars,in_dist,98,0.20232,0.02638
-bars,ood,41,0.06060,0.01911
-ticks,in_dist,120,0.16574,0.02551
-ticks,ood,19,0.12752,0.01619
-ar,in_dist,41,0.17396,0.01030
-ar,ood,98,0.15489,0.03007
+category, bucket , samples, bar_f1 , tick_f1
+bars    , in_dist,      98, 0.20232, 0.02638
+bars    , ood    ,      41, 0.06060, 0.01911
+ticks   , in_dist,     120, 0.16574, 0.02551
+ticks   , ood    ,      19, 0.12752, 0.01619
+ar      , in_dist,      41, 0.17396, 0.01030
+ar      , ood    ,      98, 0.15489, 0.03007
