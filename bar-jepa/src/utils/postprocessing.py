@@ -203,6 +203,115 @@ def evaluate_value_accuracy(
     return hard_acc, relaxed_acc
 
 
+def evaluate_confusion(
+    gt_bars: torch.Tensor,
+    gt_ticks: torch.Tensor,
+    p_bars: torch.Tensor,
+    p_ticks: torch.Tensor,
+    dist_thresh: float
+) -> tuple[int, int, int, int, int, int, int, int]:
+    """
+    Returns a full confusion matrix for bar/tick keypoint detection.
+
+                     p_bar       p_tick       p_none
+        gt_bar       tp_bar      bar_as_tick  fn_bar
+        gt_tick      tick_as_bar tp_tick      fn_tick
+        gt_none      fp_bar      fp_tick      –
+
+    :param gt_bars: ground truth bars [y, x, value], shape [N, 3]
+    :param gt_ticks: ground truth ticks [y, x, value], shape [M, 3]
+    :param p_bars: predicted bars [y, x, conf], shape [P, 3]
+    :param p_ticks: predicted ticks [y, x, conf], shape [Q, 3]
+    :param dist_thresh: max. distance threshold for matching
+    :return: tuple containing:
+
+        - tp_bar: GT bars matched with predicted bars
+        - bar_as_tick: GT bars matched with predicted ticks (cross-class)
+        - fn_bar: GT bars with no match
+        - fp_bar: predicted bars with no GT match
+        - tp_tick: GT ticks matched with predicted ticks
+        - tick_as_bar: GT ticks matched with predicted bars (cross-class)
+        - fn_tick: GT ticks with no match
+        - fp_tick: predicted ticks with no GT match
+    """
+    device = gt_bars.device
+    n_gt_bars = gt_bars.size(0)
+    n_gt_ticks = gt_ticks.size(0)
+    n_p_bars = p_bars.size(0)
+    n_p_ticks = p_ticks.size(0)
+
+    empty = torch.empty(0, dtype=torch.long, device=device)
+
+    # --- Pass 1: within-class matching ---
+    if n_gt_bars > 0 and n_p_bars > 0:
+        gt_bar_idx, p_bar_idx = hungarian_match(gt_bars[:, :2], p_bars[:, :2], dist_thresh)
+    else:
+        gt_bar_idx, p_bar_idx = empty, empty
+
+    if n_gt_ticks > 0 and n_p_ticks > 0:
+        gt_tick_idx, p_tick_idx = hungarian_match(gt_ticks[:, :2], p_ticks[:, :2], dist_thresh)
+    else:
+        gt_tick_idx, p_tick_idx = empty, empty
+
+    tp_bar = int(gt_bar_idx.numel())
+    tp_tick = int(gt_tick_idx.numel())
+
+    # Build masks of unmatched points after pass 1
+    unmatched_gt_bar = torch.ones(n_gt_bars, dtype=torch.bool, device=device)
+    unmatched_p_bar = torch.ones(n_p_bars, dtype=torch.bool, device=device)
+    unmatched_gt_tick = torch.ones(n_gt_ticks, dtype=torch.bool, device=device)
+    unmatched_p_tick = torch.ones(n_p_ticks, dtype=torch.bool, device=device)
+
+    if gt_bar_idx.numel() > 0:
+        unmatched_gt_bar[gt_bar_idx] = False
+        unmatched_p_bar[p_bar_idx] = False
+    if gt_tick_idx.numel() > 0:
+        unmatched_gt_tick[gt_tick_idx] = False
+        unmatched_p_tick[p_tick_idx] = False
+
+    # --- Pass 2: cross-class matching on remaining unmatched points ---
+    ub_gt_bar = gt_bars[unmatched_gt_bar, :2]
+    ub_p_tick = p_ticks[unmatched_p_tick, :2]
+    ub_gt_tick = gt_ticks[unmatched_gt_tick, :2]
+    ub_p_bar = p_bars[unmatched_p_bar, :2]
+
+    # Unmatched GT bars vs unmatched pred ticks
+    if ub_gt_bar.size(0) > 0 and ub_p_tick.size(0) > 0:
+        xm_gt_bar, xm_p_tick = hungarian_match(ub_gt_bar, ub_p_tick, dist_thresh)
+    else:
+        xm_gt_bar, xm_p_tick = empty, empty
+
+    bar_as_tick = int(xm_gt_bar.numel())
+
+    # Unmatched GT ticks vs unmatched pred bars
+    if ub_gt_tick.size(0) > 0 and ub_p_bar.size(0) > 0:
+        xm_gt_tick, xm_p_bar = hungarian_match(ub_gt_tick, ub_p_bar, dist_thresh)
+    else:
+        xm_gt_tick, xm_p_bar = empty, empty
+
+    tick_as_bar = int(xm_gt_tick.numel())
+
+    # Update masks based on cross-class matches
+    unmatched_gt_bar_idx = unmatched_gt_bar.nonzero(as_tuple=False).squeeze(1)
+    unmatched_p_tick_idx = unmatched_p_tick.nonzero(as_tuple=False).squeeze(1)
+    unmatched_gt_tick_idx = unmatched_gt_tick.nonzero(as_tuple=False).squeeze(1)
+    unmatched_p_bar_idx = unmatched_p_bar.nonzero(as_tuple=False).squeeze(1)
+
+    if xm_gt_bar.numel() > 0:
+        unmatched_gt_bar[unmatched_gt_bar_idx[xm_gt_bar]] = False
+        unmatched_p_tick[unmatched_p_tick_idx[xm_p_tick]] = False
+    if xm_gt_tick.numel() > 0:
+        unmatched_gt_tick[unmatched_gt_tick_idx[xm_gt_tick]] = False
+        unmatched_p_bar[unmatched_p_bar_idx[xm_p_bar]] = False
+
+    fn_bar = int(unmatched_gt_bar.sum())
+    fn_tick = int(unmatched_gt_tick.sum())
+    fp_bar = int(unmatched_p_bar.sum())
+    fp_tick = int(unmatched_p_tick.sum())
+
+    return tp_bar, bar_as_tick, fn_bar, fp_bar, tp_tick, tick_as_bar, fn_tick, fp_tick
+
+
 def f1(
     precision: float,
     recall: float

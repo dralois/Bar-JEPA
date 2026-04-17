@@ -1,0 +1,25 @@
+data:
+  crop_size: 224
+  patch_size: 14
+  num_workers: 1
+  pin_mem: false
+  root_path: ./UBPMC
+  is_ubpmc: true
+  preserve_aspect_ratio: true
+keypoint:
+  use_aux_heads: true
+  hm_slots: 32
+  tick_slots: 15
+  pnt_detect_thresh: 0.75
+  cls_conf_thresh: 0.75
+  eval_thresh: 1.5
+logging:
+  folder: ./output
+  write_tag: eval_classic_ctt
+ocr:
+  language: en
+  rec_model: latin_PP-OCRv5_mobile_rec
+meta:
+  model_name: vit_huge
+  decoder_type: classic
+  read_checkpoint: ./output/kp-cl-arp-ctt-ft-latest.pth.tar
