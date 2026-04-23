@@ -91,7 +91,8 @@ def main(args):
     # -- LOGGING
     folder = args['logging']['folder']
     tag = args['logging']['write_tag']
-    ds_name = 'ubpmc' if is_ubpmc else 'charts'
+    ds_name = 'UB PMC' if is_ubpmc else 'Synthetic Charts'
+    ds_path = 'ubpmc' if is_ubpmc else 'charts'
     os.makedirs(folder, exist_ok=True)
 
     # -- OCR
@@ -185,7 +186,7 @@ def main(args):
         scaler=None)
 
     # -- make csv loggers
-    metrics_log_file = os.path.join(folder, f'{tag}_{ds_name}.csv')
+    metrics_log_file = os.path.join(folder, f'{tag}_{ds_path}.csv')
     metrics_csv_logger = CSVLogger(
         metrics_log_file,
         ('%d', 'samples'),
@@ -201,7 +202,7 @@ def main(args):
         ('%.5f', 'tick_f1'),
     )
 
-    cat_log_file = os.path.join(folder, f'{tag}_{ds_name}_categories.csv')
+    cat_log_file = os.path.join(folder, f'{tag}_{ds_path}_categories.csv')
     cat_csv_logger = CSVLogger(
         cat_log_file,
         ('%s', 'category'),
@@ -211,7 +212,7 @@ def main(args):
         ('%.5f', 'tick_f1'),
     )
 
-    cm_plot_file = os.path.join(folder, f'{tag}_{ds_name}_confusion.png')
+    cm_plot_file = os.path.join(folder, f'{tag}_{ds_path}_confusion.png')
 
     def load_chart(data, full_data, targets):
         img = data[0].to(device, non_blocking=True)
@@ -287,7 +288,7 @@ def main(args):
         ax.set_yticks(range(3))
         ax.set_xticklabels(col_labels)
         ax.set_yticklabels(row_labels)
-        ax.set_title(f'Confusion Matrix — {ds_name}')
+        ax.set_title(f'{ds_name} ({tag.replace("eval_", "")})')
 
         vmax = float(masked.max()) if masked.count() > 0 else 1.0
         for i in range(3):

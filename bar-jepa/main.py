@@ -28,9 +28,34 @@ parser.add_argument(
 parser.add_argument(
     '--devices', type=str, nargs='+', default=['cuda:0'],
     help='which devices to use on local machine')
+parser.add_argument(
+    '--override', type=str, nargs='*', default=[],
+    help='override config values, e.g. data.root_path=./data data.is_ubpmc=false')
 
 
-def process_main(rank, mode, fname, world_size, devices):
+def _apply_overrides(params, overrides):
+    for override in overrides:
+        key, raw = override.split('=', 1)
+        keys = key.split('.')
+        d = params
+        for k in keys[:-1]:
+            d = d[k]
+        if raw.lower() == 'true':
+            value = True
+        elif raw.lower() == 'false':
+            value = False
+        else:
+            try:
+                value = int(raw)
+            except ValueError:
+                try:
+                    value = float(raw)
+                except ValueError:
+                    value = raw
+        d[keys[-1]] = value
+
+
+def process_main(rank, mode, fname, world_size, devices, overrides=()):
     import os
     os.environ['CUDA_VISIBLE_DEVICES'] = str(devices[rank].split(':')[-1])
 
@@ -48,6 +73,7 @@ def process_main(rank, mode, fname, world_size, devices):
     params = None
     with open(fname, 'r') as y_file:
         params = yaml.safe_load(y_file)
+        _apply_overrides(params, overrides)
         logger.info('loaded params...')
         pp = pprint.PrettyPrinter(indent=4)
         logger.info(pp.pformat(params))
@@ -87,7 +113,7 @@ if __name__ == '__main__':
     for rank in range(num_gpus):
         processes.append(mp.Process(
             target=process_main,
-            args=(rank, args.mode, args.fname, num_gpus, args.devices)
+            args=(rank, args.mode, args.fname, num_gpus, args.devices, args.override)
         ))
         processes[-1].start()
 
