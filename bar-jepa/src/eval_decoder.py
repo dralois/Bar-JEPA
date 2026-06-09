@@ -346,6 +346,10 @@ def main(args):
         ('ar',    'ood'):     {'n': 0, 'bar_f1': 0.0, 'tick_f1': 0.0},
     }
 
+    act_folder = os.path.join(folder, 'activations', tag)
+    os.makedirs(act_folder, exist_ok=True)
+    _CLS_CHANNEL_NAMES = ['Background', 'Bar', 'Tick']
+
     with torch.inference_mode():
         test_sampler.set_epoch(0)
 
@@ -356,7 +360,7 @@ def main(args):
             dynamic_ncols=True
         )
 
-        for data, full_data, targets in eval_iter:
+        for sample_idx, (data, full_data, targets) in enumerate(eval_iter):
             img, full_img, grid, gt_org, gt_ticks, gt_bars = load_chart(data, full_data, targets)
 
             # Inference
@@ -374,6 +378,42 @@ def main(args):
 
             # Filter predictions using nms
             p_bars, p_ticks = nms(p_bars, p_ticks, radius_thresh)
+
+            # Save sigmoid-activated classification maps + chart image
+            act_maps = torch.sigmoid(p_cls).cpu().numpy()
+            fig, axes = plt.subplots(1, 4, figsize=(14, 3.5))
+            for ch, (ax, name) in enumerate(zip(axes, _CLS_CHANNEL_NAMES)):
+                im = ax.imshow(act_maps[ch], cmap='viridis', vmin=0.0, vmax=1.0)
+                ax.set_title(name, fontsize=9)
+                ax.axis('off')
+                plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            h_img, w_img = full_img.shape[:2]
+            axes[3].imshow(full_img)
+
+            # Scatter predicted and GT bars/ticks
+            for pts, color, marker, label in [
+                (gt_bars,  '#2ecc71', 'o', 'GT bar'),
+                (gt_ticks, '#e67e22', 'o', 'GT tick'),
+                (p_bars,   '#27ae60', 'x', 'Pred bar'),
+                (p_ticks,  '#d35400', 'x', 'Pred tick'),
+            ]:
+                if pts is not None and len(pts) > 0:
+                    pts_np = pts.cpu().numpy()
+                    xs = pts_np[:, 1] * (w_img - 1)
+                    ys = pts_np[:, 0] * (h_img - 1)
+                    axes[3].scatter(xs, ys, s=20, c=color, marker=marker,
+                                    linewidths=1.2, label=label, zorder=3)
+            axes[3].legend(fontsize=6, loc='upper right', framealpha=0.7)
+            axes[3].set_title('Chart', fontsize=9)
+            axes[3].axis('off')
+
+            # Save in corresponding tags' folder
+            arp_label = 'ARP' if preserve_aspect_ratio else 'No ARP'
+            act_file = os.path.join(act_folder, f'{tag}_{ds_path}_{sample_idx:04d}_cls.png')
+            fig.suptitle(f'{ds_name} — {decoder_type.capitalize()} {arp_label} — sample {sample_idx:04d}', fontsize=10)
+            fig.tight_layout()
+            fig.savefig(act_file, dpi=120)
+            plt.close(fig)
 
             # Evaluate predictions
             b_p, b_r, b_f1, t_p, t_r, t_f1 = evaluate_gt_p_match(
@@ -442,6 +482,7 @@ def main(args):
     logger.info(f'Wrote eval metrics to {metrics_log_file}')
     logger.info(f'Wrote category breakdown to {cat_log_file}')
     logger.info(f'Saved confusion matrix plot to {cm_plot_file}')
+    logger.info(f'Saved cls activation maps to {act_folder}')
 
 if __name__ == '__main__':
     main({})
