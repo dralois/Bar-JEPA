@@ -70,9 +70,7 @@ pip install paddlepaddle paddleocr
 | [UB PMC / ICPR CHART-Info 2022](https://chartinfo.github.io/) | Decoder finetuning + evaluation | `./UBPMC` |
 | [Chart-to-Text](https://github.com/vis-nlp/Chart-to-text) (optional) | Encoder real-world finetuning (15k) | `./CTT` |
 
-The synthetic dataset is also available on HuggingFace:
-
-> **TODO:** `hf_dataset_link_here` — download and place at `./data` (100k finetuning set) and `./data_decoder` (17k decoder pretraining set).
+The synthetic dataset is also available on HuggingFace at [dralois/Bar-JEPA](https://huggingface.co/datasets/dralois/Bar-JEPA) — download and place at `./data` (100k finetuning set) and `./data_decoder` (17k decoder pretraining set).
 
 **Or generate from scratch:**
 
@@ -84,9 +82,7 @@ python bar-gen/generator.py --output ./data --count 100000
 
 ## Checkpoints
 
-Checkpoints are available on HuggingFace:
-
-> **TODO:** `hf_checkpoints_link_here` — download and place in `./output/`.
+Checkpoints are available on HuggingFace at [dralois/Bar-JEPA](https://huggingface.co/dralois/Bar-JEPA) — download and place in `./output/`.
 
 Place the ViT-H base checkpoint at `./output/IN1K-vit.h.14-300e.pth.tar` before pretraining. The decoder configs reference checkpoints by the following naming convention:
 
